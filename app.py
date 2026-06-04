@@ -416,15 +416,23 @@ def apply_visual_theme() -> None:
         div[data-testid="stNumberInput"] div[data-baseweb="input"],
         div[data-testid="stNumberInput"] input {
             background: #ffffff !important;
+            border: 1px solid #b8c6d3 !important;
             border-color: #b8c6d3 !important;
+            border-radius: 8px !important;
             color: #000000 !important;
             -webkit-text-fill-color: #000000 !important;
         }
 
         div[data-testid="stNumberInput"] button {
             background: #eef3f8 !important;
+            border: 1px solid #b8c6d3 !important;
             border-color: #b8c6d3 !important;
             color: #000000 !important;
+        }
+
+        div[data-testid="stNumberInput"] div[data-baseweb="input"]:focus-within {
+            border-color: var(--pool-accent) !important;
+            box-shadow: 0 0 0 1px color-mix(in srgb, var(--pool-accent) 45%, transparent) !important;
         }
 
         div[data-testid="stNumberInput"] svg,
