@@ -2962,6 +2962,21 @@ def leaderboard_snapshot(
     knockout_matchups: pd.DataFrame,
     third_place_combinations: pd.DataFrame,
 ) -> pd.DataFrame:
+    columns = [
+        "rank",
+        "user_id",
+        "user_name",
+        "is_ai",
+        "total_points",
+        "match_score_points",
+        "group_standings_points",
+        "knockout_progression_points",
+        "correct_winners",
+        "exact_home_goals",
+        "exact_away_goals",
+        "exact_goal_components",
+        "exact_scores",
+    ]
     rows = []
     actual_state = derive_tournament_state(
         teams, matches, results, knockout_matchups, third_place_combinations, use_cards=True
@@ -2981,6 +2996,8 @@ def leaderboard_snapshot(
                 **breakdown,
             }
         )
+    if not rows:
+        return pd.DataFrame(columns=columns)
     return add_rank(pd.DataFrame(rows), "total_points")
 
 
@@ -3346,6 +3363,9 @@ def render_additional_rankings(
     match_ids = completed_match_ids(results, matches)
     scoped_results = results_through_match(results, matches, match_ids[-1] if match_ids else None)
     snapshot = leaderboard_snapshot(participants, scoped_results, teams, matches, knockout_matchups, third_place_combinations)
+    if snapshot.empty:
+        st.info("Additional rankings will appear once participants have submitted predictions.")
+        return
 
     st.subheader("Most Correct Winners")
     winners = add_rank(snapshot[["user_name", "correct_winners"]].rename(columns={"correct_winners": "Correct winners"}), "Correct winners")
