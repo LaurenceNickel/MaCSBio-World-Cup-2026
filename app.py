@@ -414,46 +414,48 @@ def apply_visual_theme() -> None:
         }
 
         div[data-testid="stNumberInput"] {
-            max-width: 13.5rem;
+            max-width: 14rem;
         }
 
         div[data-testid="stNumberInput"] div[data-baseweb="input"] {
             overflow: hidden;
-            background: #ffffff !important;
-            border: 1px solid #c8d6e3 !important;
+            background: #f8fbff !important;
+            border: 1px solid #cfdae6 !important;
             border-radius: 10px !important;
-            box-shadow: 0 5px 14px rgba(0, 43, 85, 0.07) !important;
+            box-shadow: none !important;
         }
 
         div[data-testid="stNumberInput"] input {
-            min-height: 2.65rem;
-            background: #ffffff !important;
+            min-height: 3rem;
+            padding-left: 0.75rem !important;
+            background: #f8fbff !important;
             border: 0 !important;
-            color: #000000 !important;
+            color: #082b4c !important;
             font-weight: 700 !important;
-            -webkit-text-fill-color: #000000 !important;
+            -webkit-text-fill-color: #082b4c !important;
         }
 
         div[data-testid="stNumberInput"] button {
-            min-height: 2.65rem !important;
-            background: #edf3f8 !important;
+            min-width: 2.2rem !important;
+            min-height: 3rem !important;
+            background: #f8fbff !important;
             border: 0 !important;
-            border-left: 1px solid #c8d6e3 !important;
+            border-left: 1px solid #dbe5ef !important;
             border-radius: 0 !important;
             color: var(--pool-primary) !important;
             font-weight: 800 !important;
         }
 
         div[data-testid="stNumberInput"] button:hover {
-            background: #dfeaf3 !important;
+            background: #eef5fb !important;
             color: var(--pool-accent) !important;
         }
 
         div[data-testid="stNumberInput"] div[data-baseweb="input"]:focus-within {
             border-color: var(--pool-accent) !important;
             box-shadow:
-                0 0 0 2px color-mix(in srgb, var(--pool-accent) 18%, transparent),
-                0 7px 18px rgba(0, 43, 85, 0.09) !important;
+                0 0 0 1px color-mix(in srgb, var(--pool-accent) 55%, transparent),
+                0 6px 16px rgba(0, 43, 85, 0.07) !important;
         }
 
         div[data-testid="stNumberInput"] svg,
