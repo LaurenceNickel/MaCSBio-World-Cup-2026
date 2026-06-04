@@ -139,6 +139,13 @@ def apply_visual_theme() -> None:
             color-scheme: light;
         }
 
+        html[data-theme="dark"],
+        body[data-theme="dark"],
+        [data-theme="dark"],
+        [data-baseweb] {
+            color-scheme: light !important;
+        }
+
         .stApp {
             color: var(--pool-ink);
             background:
@@ -352,6 +359,23 @@ def apply_visual_theme() -> None:
             overflow: hidden;
         }
 
+        div[data-testid="stExpander"] details,
+        div[data-testid="stExpander"] summary,
+        div[data-testid="stExpander"] [data-testid="stExpanderDetails"],
+        div[data-testid="stExpander"] [data-testid="stExpanderToggleIcon"] {
+            background: #ffffff !important;
+            color: #000000 !important;
+        }
+
+        div[data-testid="stExpander"] summary {
+            border-bottom: 1px solid var(--pool-border);
+        }
+
+        div[data-testid="stExpander"] summary *,
+        div[data-testid="stExpander"] [data-testid="stExpanderDetails"] * {
+            color: #000000;
+        }
+
         .stButton > button,
         .stFormSubmitButton > button {
             color: #ffffff;
@@ -381,6 +405,33 @@ def apply_visual_theme() -> None:
 
         textarea::placeholder {
             color: rgba(255, 255, 255, 0.7);
+        }
+
+        div[data-testid="stNumberInput"] label {
+            font-size: 1rem;
+            font-weight: 700;
+            color: #000000;
+        }
+
+        div[data-testid="stNumberInput"] div[data-baseweb="input"],
+        div[data-testid="stNumberInput"] input {
+            background: #ffffff !important;
+            border-color: #b8c6d3 !important;
+            color: #000000 !important;
+            -webkit-text-fill-color: #000000 !important;
+        }
+
+        div[data-testid="stNumberInput"] button {
+            background: #eef3f8 !important;
+            border-color: #b8c6d3 !important;
+            color: #000000 !important;
+        }
+
+        div[data-testid="stNumberInput"] svg,
+        div[data-testid="stNumberInput"] svg * {
+            color: #000000 !important;
+            stroke: #000000 !important;
+            fill: #000000 !important;
         }
 
         div[data-testid="stTextInput"] div[data-baseweb="input"] {
@@ -413,6 +464,7 @@ def apply_visual_theme() -> None:
             border-radius: 8px;
             box-shadow: none;
             background: #ffffff;
+            color: #000000;
         }
 
         div[data-testid="stSelectbox"] div[data-baseweb="select"]:focus-within,
@@ -426,6 +478,14 @@ def apply_visual_theme() -> None:
             font-size: 1rem;
             font-weight: 700;
             color: #000000;
+        }
+
+        div[data-baseweb="popover"],
+        div[data-baseweb="popover"] *,
+        ul[role="listbox"],
+        ul[role="listbox"] * {
+            background-color: #ffffff !important;
+            color: #000000 !important;
         }
 
         div[data-testid="stAlert"] {
