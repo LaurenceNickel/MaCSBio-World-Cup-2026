@@ -16,9 +16,10 @@ import streamlit as st
 
 try:
     import gspread
-    from gspread.exceptions import WorksheetNotFound
+    from gspread.exceptions import APIError, WorksheetNotFound
 except ImportError:
     gspread = None
+    APIError = Exception
     WorksheetNotFound = Exception
 
 
@@ -45,6 +46,10 @@ SHEET_BACKED_FILES = {
 CONFIG_SHEET = "config"
 DRAFTS_SHEET = "drafts"
 PREDICTIONS_SHEET = "predictions"
+
+
+class GoogleSheetsRateLimitError(RuntimeError):
+    pass
 
 GROUPS = list("ABCDEFGHIJKL")
 GROUP_STAGE = "group_stage"
@@ -748,6 +753,21 @@ def google_sheet_id() -> str:
     return value
 
 
+def is_google_sheets_rate_limit_error(error: Exception) -> bool:
+    response = getattr(error, "response", None)
+    status_code = getattr(response, "status_code", None)
+    text = str(error)
+    if response is not None:
+        text = f"{text} {getattr(response, 'text', '')}"
+    text = text.lower()
+    return status_code == 429 or "quota" in text or "rate limit" in text or "resource_exhausted" in text
+
+
+def raise_if_google_sheets_rate_limited(error: Exception) -> None:
+    if is_google_sheets_rate_limit_error(error):
+        raise GoogleSheetsRateLimitError from error
+
+
 @st.cache_resource
 def sheets_workbook():
     if gspread is None:
@@ -757,11 +777,19 @@ def sheets_workbook():
         raise RuntimeError("GOOGLE_SHEET_ID is missing from Streamlit secrets.")
     credentials = dict(st.secrets["gcp_service_account"])
     client = gspread.service_account_from_dict(credentials)
-    return client.open_by_key(sheet_id)
+    try:
+        return client.open_by_key(sheet_id)
+    except APIError as error:
+        raise_if_google_sheets_rate_limited(error)
+        raise
 
 
 def get_worksheet(name: str):
-    return sheets_workbook().worksheet(name)
+    try:
+        return sheets_workbook().worksheet(name)
+    except APIError as error:
+        raise_if_google_sheets_rate_limited(error)
+        raise
 
 
 def get_or_create_worksheet(name: str, rows: int = 1000, cols: int = 20):
@@ -769,7 +797,14 @@ def get_or_create_worksheet(name: str, rows: int = 1000, cols: int = 20):
     try:
         return workbook.worksheet(name)
     except WorksheetNotFound:
-        return workbook.add_worksheet(title=name, rows=rows, cols=cols)
+        try:
+            return workbook.add_worksheet(title=name, rows=rows, cols=cols)
+        except APIError as error:
+            raise_if_google_sheets_rate_limited(error)
+            raise
+    except APIError as error:
+        raise_if_google_sheets_rate_limited(error)
+        raise
 
 
 def sheet_values_to_frame(name: str, columns: tuple[str, ...] = ()) -> pd.DataFrame:
@@ -779,6 +814,9 @@ def sheet_values_to_frame(name: str, columns: tuple[str, ...] = ()) -> pd.DataFr
         values = get_worksheet(name).get_all_values()
     except WorksheetNotFound:
         return pd.DataFrame(columns=list(columns))
+    except APIError as error:
+        raise_if_google_sheets_rate_limited(error)
+        raise
     if not values:
         return pd.DataFrame(columns=list(columns))
 
@@ -817,8 +855,12 @@ def write_sheet(name: str, table: pd.DataFrame, columns: list[str] | None = None
     row_count = max(1000, len(values) + 10)
     col_count = max(20, len(output.columns) + 5)
     worksheet = get_or_create_worksheet(name, rows=row_count, cols=col_count)
-    worksheet.clear()
-    worksheet.update(values)
+    try:
+        worksheet.clear()
+        worksheet.update(values)
+    except APIError as error:
+        raise_if_google_sheets_rate_limited(error)
+        raise
     clear_cache()
 
 
@@ -3883,5 +3925,32 @@ def main() -> None:
         render_leaderboard()
 
 
+def render_google_sheets_rate_limit_dialog() -> None:
+    title = "Google Sheets limit reached"
+    message = (
+        "The app has reached the temporary Google Sheets API request limit. "
+        "Wait about one minute, then try again. Your submitted data is stored in Google Sheets; "
+        "this is a temporary quota throttle, not a data-loss error."
+    )
+
+    dialog = getattr(st, "dialog", None)
+    if callable(dialog):
+        @dialog(title)
+        def quota_dialog() -> None:
+            st.warning(message)
+            if st.button("Try again"):
+                st.rerun()
+
+        quota_dialog()
+    else:
+        st.error(f"{title}: {message}")
+        if st.button("Try again"):
+            st.rerun()
+    st.stop()
+
+
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except GoogleSheetsRateLimitError:
+        render_google_sheets_rate_limit_dialog()
