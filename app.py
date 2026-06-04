@@ -413,26 +413,47 @@ def apply_visual_theme() -> None:
             color: #000000;
         }
 
-        div[data-testid="stNumberInput"] div[data-baseweb="input"],
-        div[data-testid="stNumberInput"] input {
+        div[data-testid="stNumberInput"] {
+            max-width: 13.5rem;
+        }
+
+        div[data-testid="stNumberInput"] div[data-baseweb="input"] {
+            overflow: hidden;
             background: #ffffff !important;
-            border: 1px solid #b8c6d3 !important;
-            border-color: #b8c6d3 !important;
-            border-radius: 8px !important;
+            border: 1px solid #c8d6e3 !important;
+            border-radius: 10px !important;
+            box-shadow: 0 5px 14px rgba(0, 43, 85, 0.07) !important;
+        }
+
+        div[data-testid="stNumberInput"] input {
+            min-height: 2.65rem;
+            background: #ffffff !important;
+            border: 0 !important;
             color: #000000 !important;
+            font-weight: 700 !important;
             -webkit-text-fill-color: #000000 !important;
         }
 
         div[data-testid="stNumberInput"] button {
-            background: #eef3f8 !important;
-            border: 1px solid #b8c6d3 !important;
-            border-color: #b8c6d3 !important;
-            color: #000000 !important;
+            min-height: 2.65rem !important;
+            background: #edf3f8 !important;
+            border: 0 !important;
+            border-left: 1px solid #c8d6e3 !important;
+            border-radius: 0 !important;
+            color: var(--pool-primary) !important;
+            font-weight: 800 !important;
+        }
+
+        div[data-testid="stNumberInput"] button:hover {
+            background: #dfeaf3 !important;
+            color: var(--pool-accent) !important;
         }
 
         div[data-testid="stNumberInput"] div[data-baseweb="input"]:focus-within {
             border-color: var(--pool-accent) !important;
-            box-shadow: 0 0 0 1px color-mix(in srgb, var(--pool-accent) 45%, transparent) !important;
+            box-shadow:
+                0 0 0 2px color-mix(in srgb, var(--pool-accent) 18%, transparent),
+                0 7px 18px rgba(0, 43, 85, 0.09) !important;
         }
 
         div[data-testid="stNumberInput"] svg,
