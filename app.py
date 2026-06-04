@@ -407,15 +407,21 @@ def apply_visual_theme() -> None:
             color: rgba(255, 255, 255, 0.7);
         }
 
-        div[data-testid="stNumberInput"] div[data-baseweb="input"] {
+        div[data-testid="stNumberInput"] > div:has(input) {
             border: 1px solid #b8c6d3;
             border-radius: 8px;
+            overflow: hidden;
             box-shadow: none;
         }
 
-        div[data-testid="stNumberInput"] div[data-baseweb="input"]:focus-within {
+        div[data-testid="stNumberInput"] > div:has(input):focus-within {
             border-color: var(--pool-accent);
             box-shadow: 0 0 0 1px color-mix(in srgb, var(--pool-accent) 45%, transparent);
+        }
+
+        div[data-testid="stNumberInput"] div[data-baseweb="input"] {
+            border: 0 !important;
+            box-shadow: none !important;
         }
 
         div[data-testid="stTextInput"] div[data-baseweb="input"] {
