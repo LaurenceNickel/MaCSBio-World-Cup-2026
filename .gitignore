@@ -13,6 +13,8 @@ __pycache__/
 
 # Streamlit secrets
 .streamlit/secrets.toml
+.streamlit/secrets.example.toml
+GOOGLE_SHEETS_SETUP.md
 
 # Google service-account credentials. Keep .streamlit/secrets.example.toml committed.
 *service-account*.json
@@ -32,3 +34,5 @@ data/leaderboard.csv
 # OS/editor noise
 .DS_Store
 Thumbs.db
+.streamlit/secrets.example.toml
+GOOGLE_SHEETS_SETUP.md

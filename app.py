@@ -741,7 +741,11 @@ def google_sheets_enabled() -> bool:
 
 
 def google_sheet_id() -> str:
-    return str(st.secrets.get("GOOGLE_SHEET_ID", "")).strip()
+    value = str(st.secrets.get("GOOGLE_SHEET_ID", "")).strip()
+    match = re.search(r"/spreadsheets/d/([^/]+)", value)
+    if match:
+        return match.group(1)
+    return value
 
 
 @st.cache_resource
