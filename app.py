@@ -407,65 +407,6 @@ def apply_visual_theme() -> None:
             color: rgba(255, 255, 255, 0.7);
         }
 
-        div[data-testid="stNumberInput"] label {
-            font-size: 1rem;
-            font-weight: 700;
-            color: #000000;
-        }
-
-        div[data-testid="stNumberInput"] {
-            max-width: 14rem;
-        }
-
-        div[data-testid="stNumberInput"] div[data-baseweb="input"] {
-            overflow: hidden;
-            background: #f8fbff !important;
-            border: 1px solid #cfdae6 !important;
-            border-radius: 8px !important;
-            box-shadow: none !important;
-        }
-
-        div[data-testid="stNumberInput"] input {
-            min-height: 3rem;
-            padding-left: 0.75rem !important;
-            background: #f8fbff !important;
-            border: 0 !important;
-            color: #082b4c !important;
-            font-weight: 700 !important;
-            -webkit-text-fill-color: #082b4c !important;
-        }
-
-        div[data-testid="stNumberInput"] button {
-            min-width: 2rem !important;
-            min-height: 3rem !important;
-            background: #f8fbff !important;
-            border: 0 !important;
-            border-radius: 0 !important;
-            color: var(--pool-primary) !important;
-            font-weight: 800 !important;
-            opacity: 0.72;
-        }
-
-        div[data-testid="stNumberInput"] button:hover {
-            background: #edf4fb !important;
-            color: var(--pool-accent) !important;
-            opacity: 1;
-        }
-
-        div[data-testid="stNumberInput"] div[data-baseweb="input"]:focus-within {
-            border-color: var(--pool-accent) !important;
-            box-shadow:
-                0 0 0 1px color-mix(in srgb, var(--pool-accent) 55%, transparent),
-                0 6px 16px rgba(0, 43, 85, 0.07) !important;
-        }
-
-        div[data-testid="stNumberInput"] svg,
-        div[data-testid="stNumberInput"] svg * {
-            color: #000000 !important;
-            stroke: #000000 !important;
-            fill: #000000 !important;
-        }
-
         div[data-testid="stTextInput"] div[data-baseweb="input"] {
             border: 1px solid #b8c6d3;
             border-radius: 8px;
