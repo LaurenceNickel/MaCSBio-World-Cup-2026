@@ -786,19 +786,26 @@ def sheets_workbook():
 
 def get_worksheet(name: str):
     try:
-        return sheets_workbook().worksheet(name)
+        return cached_worksheet(name)
     except APIError as error:
         raise_if_google_sheets_rate_limited(error)
         raise
 
 
+@st.cache_resource
+def cached_worksheet(name: str):
+    return sheets_workbook().worksheet(name)
+
+
 def get_or_create_worksheet(name: str, rows: int = 1000, cols: int = 20):
     workbook = sheets_workbook()
     try:
-        return workbook.worksheet(name)
+        return cached_worksheet(name)
     except WorksheetNotFound:
         try:
-            return workbook.add_worksheet(title=name, rows=rows, cols=cols)
+            worksheet = workbook.add_worksheet(title=name, rows=rows, cols=cols)
+            st.cache_resource.clear()
+            return worksheet
         except APIError as error:
             raise_if_google_sheets_rate_limited(error)
             raise
@@ -856,8 +863,7 @@ def write_sheet(name: str, table: pd.DataFrame, columns: list[str] | None = None
     col_count = max(20, len(output.columns) + 5)
     worksheet = get_or_create_worksheet(name, rows=row_count, cols=col_count)
     try:
-        worksheet.clear()
-        worksheet.update(values)
+        worksheet.update(values=values, range_name="A1")
     except APIError as error:
         raise_if_google_sheets_rate_limited(error)
         raise
@@ -2960,13 +2966,23 @@ def load_ai_predictions() -> list[dict[str, Any]]:
 
 def load_human_predictions(users: pd.DataFrame) -> list[dict[str, Any]]:
     participants = []
+    all_predictions = (
+        read_sheet(PREDICTIONS_SHEET, tuple(PREDICTION_COLUMNS))
+        if google_sheets_enabled()
+        else pd.DataFrame(columns=PREDICTION_COLUMNS)
+    )
     for _, user in users.iterrows():
+        user_id = str(user["user_id"])
+        if google_sheets_enabled():
+            predictions = all_predictions[all_predictions["user_id"].astype(str).eq(user_id)][PREDICTION_COLUMNS].copy()
+        else:
+            predictions = load_user_predictions(user_id)
         participants.append(
             {
-                "user_id": user["user_id"],
+                "user_id": user_id,
                 "user_name": user["user_name"],
                 "is_ai": False,
-                "predictions": load_user_predictions(user["user_id"]),
+                "predictions": predictions,
             }
         )
     return participants
