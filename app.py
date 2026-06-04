@@ -421,7 +421,7 @@ def apply_visual_theme() -> None:
             overflow: hidden;
             background: #f8fbff !important;
             border: 1px solid #cfdae6 !important;
-            border-radius: 10px !important;
+            border-radius: 8px !important;
             box-shadow: none !important;
         }
 
@@ -436,19 +436,20 @@ def apply_visual_theme() -> None:
         }
 
         div[data-testid="stNumberInput"] button {
-            min-width: 2.2rem !important;
+            min-width: 2rem !important;
             min-height: 3rem !important;
             background: #f8fbff !important;
             border: 0 !important;
-            border-left: 1px solid #dbe5ef !important;
             border-radius: 0 !important;
             color: var(--pool-primary) !important;
             font-weight: 800 !important;
+            opacity: 0.72;
         }
 
         div[data-testid="stNumberInput"] button:hover {
-            background: #eef5fb !important;
+            background: #edf4fb !important;
             color: var(--pool-accent) !important;
+            opacity: 1;
         }
 
         div[data-testid="stNumberInput"] div[data-baseweb="input"]:focus-within {
