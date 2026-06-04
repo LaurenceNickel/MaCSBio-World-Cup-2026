@@ -67,6 +67,8 @@ USERS_COLUMNS = ["user_id", "user_name", "total_points"]
 PENALTY_WINNER_COLUMN = "penalty_winner"
 PREDICTION_COLUMNS = ["user_id", "match_id", "home_goals", "away_goals", PENALTY_WINNER_COLUMN]
 DRAFT_QUERY_PARAM = "draft"
+PREDICTION_SESSION_VALUES_KEY = "prediction_session_values"
+PREDICTION_SESSION_VALUES_USER_KEY = "prediction_session_values_user_id"
 STANDING_COLUMNS = [
     "team_id",
     "games_played",
@@ -996,6 +998,8 @@ def clear_prediction_session() -> None:
         if key.startswith(("pred_home_", "pred_away_", "pred_penalty_")):
             del st.session_state[key]
     st.session_state.pop("prediction_session_initialized_for", None)
+    st.session_state.pop(PREDICTION_SESSION_VALUES_KEY, None)
+    st.session_state.pop(PREDICTION_SESSION_VALUES_USER_KEY, None)
 
 
 def activate_user(user_id: str, user_name: str) -> None:
@@ -1129,6 +1133,60 @@ def autosave_draft(
     st.session_state["last_saved_draft_at"] = now
 
 
+def prediction_widget_state_exists(matches: pd.DataFrame) -> bool:
+    for match_id in matches["match_id"]:
+        if f"pred_home_{match_id}" in st.session_state or f"pred_away_{match_id}" in st.session_state:
+            return True
+    return False
+
+
+def prediction_widget_state_complete(matches: pd.DataFrame) -> bool:
+    for match_id in matches["match_id"]:
+        if f"pred_home_{match_id}" not in st.session_state or f"pred_away_{match_id}" not in st.session_state:
+            return False
+    return True
+
+
+def prediction_frame_from_records(records: Any) -> pd.DataFrame:
+    predictions = pd.DataFrame(records if isinstance(records, list) else [])
+    for column in PREDICTION_COLUMNS:
+        if column not in predictions.columns:
+            predictions[column] = ""
+    return predictions[PREDICTION_COLUMNS].fillna("")
+
+
+def remember_prediction_session(matches: pd.DataFrame, user_id: str) -> pd.DataFrame | None:
+    if not prediction_widget_state_exists(matches):
+        return None
+    predictions = make_score_df_from_session(matches, user_id)
+    st.session_state[PREDICTION_SESSION_VALUES_KEY] = (
+        predictions[PREDICTION_COLUMNS].fillna("").to_dict(orient="records")
+    )
+    st.session_state[PREDICTION_SESSION_VALUES_USER_KEY] = user_id
+    return predictions
+
+
+def remembered_prediction_session(user_id: str) -> pd.DataFrame | None:
+    if st.session_state.get(PREDICTION_SESSION_VALUES_USER_KEY) != user_id:
+        return None
+    return prediction_frame_from_records(st.session_state.get(PREDICTION_SESSION_VALUES_KEY, []))
+
+
+def persist_active_prediction_session(matches: pd.DataFrame) -> None:
+    user_id = str(st.session_state.get("user_id", "")).strip()
+    if not user_id:
+        return
+    predictions = remember_prediction_session(matches, user_id)
+    if predictions is None:
+        return
+
+    draft_id = str(st.session_state.get("draft_id", "")).strip().lower()
+    if not valid_draft_id(draft_id):
+        return
+    user_name = str(st.session_state.get("draft_user_name", st.session_state.get("user_name", ""))).strip()
+    autosave_draft(draft_id, user_id, user_name, predictions, min_interval_seconds=0)
+
+
 def restore_prediction_widgets(predictions: pd.DataFrame, matches: pd.DataFrame, user_id: str) -> None:
     existing_lookup = {row["match_id"]: row for _, row in predictions.iterrows()}
     for match_id in matches["match_id"]:
@@ -1141,6 +1199,10 @@ def restore_prediction_widgets(predictions: pd.DataFrame, matches: pd.DataFrame,
             "" if row is None else str(row.get(PENALTY_WINNER_COLUMN, "")).strip()
         )
     st.session_state["prediction_session_initialized_for"] = user_id
+    st.session_state[PREDICTION_SESSION_VALUES_KEY] = (
+        predictions[PREDICTION_COLUMNS].fillna("").to_dict(orient="records")
+    )
+    st.session_state[PREDICTION_SESSION_VALUES_USER_KEY] = user_id
 
 
 def restore_draft_from_url(matches: pd.DataFrame) -> None:
@@ -1155,11 +1217,7 @@ def restore_draft_from_url(matches: pd.DataFrame) -> None:
     user_id = str(draft.get("user_id", "PENDING")).strip() or "PENDING"
     user_name = str(draft.get("user_name", "")).strip()
 
-    predictions = pd.DataFrame(draft.get("predictions", []))
-    for column in PREDICTION_COLUMNS:
-        if column not in predictions.columns:
-            predictions[column] = ""
-    predictions = predictions[PREDICTION_COLUMNS].fillna("")
+    predictions = prediction_frame_from_records(draft.get("predictions", []))
 
     st.session_state["draft_id"] = draft_id
     st.session_state["user_id"] = user_id
@@ -2736,7 +2794,21 @@ def render_prediction_match(
 
 
 def initialize_prediction_session(user_id: str, matches: pd.DataFrame) -> None:
-    if st.session_state.get("prediction_session_initialized_for") == user_id:
+    if (
+        st.session_state.get("prediction_session_initialized_for") == user_id
+        and prediction_widget_state_complete(matches)
+    ):
+        return
+
+    remembered = remembered_prediction_session(user_id)
+    if remembered is not None:
+        restore_prediction_widgets(remembered, matches, user_id)
+        return
+
+    draft_id = str(st.session_state.get("draft_id", "")).strip().lower()
+    draft = load_draft(draft_id) if valid_draft_id(draft_id) else None
+    if draft is not None and str(draft.get("user_id", "")).strip() == user_id:
+        restore_prediction_widgets(prediction_frame_from_records(draft.get("predictions", [])), matches, user_id)
         return
 
     existing = load_user_predictions(user_id)
@@ -2816,7 +2888,9 @@ def render_prediction_panel(
             user_id = committed_user_id
             st.success(f"Predictions saved for {user_name_value}.")
 
-    autosave_draft(draft_id, st.session_state["user_id"], user_name_value, make_score_df_from_session(matches, user_id))
+    current_draft = make_score_df_from_session(matches, user_id)
+    remember_prediction_session(matches, user_id)
+    autosave_draft(draft_id, st.session_state["user_id"], user_name_value, current_draft)
 
 
 def render_login(users: pd.DataFrame) -> None:
@@ -3980,6 +4054,9 @@ def main() -> None:
 
     page = st.sidebar.radio("Tabs", available_pages)
     st.sidebar.caption("Submissions are open." if submissions_open else "Submissions are closed.")
+
+    if page != "Home":
+        persist_active_prediction_session(matches)
 
     if page == "Home":
         render_home(teams, matches, users, knockout_matchups, third_place_combinations)
