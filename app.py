@@ -154,6 +154,18 @@ def apply_visual_theme() -> None:
                 linear-gradient(135deg, var(--pool-bg) 0%, var(--pool-bg-soft) 56%, var(--pool-panel) 100%);
         }
 
+        footer,
+        [data-testid="stFooter"],
+        [data-testid="stDecoration"],
+        [data-testid="stStatusWidget"],
+        a[href*="github.com"],
+        a[href*="streamlit.io/cloud"],
+        a[href*="share.streamlit.io"] {
+            display: none !important;
+            visibility: hidden !important;
+            pointer-events: none !important;
+        }
+
         [data-testid="stHeader"] {
             background: var(--pool-primary);
             border-bottom: 5px solid var(--pool-accent);
