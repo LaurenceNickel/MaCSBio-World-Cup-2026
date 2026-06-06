@@ -2047,10 +2047,10 @@ def calculate_user_score_breakdown_from_states(
                 group_standings_points += 5
 
     for stage, stage_points in [
-        ("round_of_16", 3),
-        ("quarter_final", 5),
-        ("semi_final", 10),
-        ("final", 15),
+        ("round_of_16", 5),
+        ("quarter_final", 10),
+        ("semi_final", 15),
+        ("final", 20),
     ]:
         actual_entrants = stage_entrants(actual_resolved, stage)
         if actual_entrants:
@@ -2061,7 +2061,7 @@ def calculate_user_score_breakdown_from_states(
     predicted_winner = prediction_state["winners"].get("M104")
     actual_winner = actual_state["winners"].get("M104")
     if predicted_winner and predicted_winner == actual_winner:
-        knockout_progression_points += 25
+        knockout_progression_points += 30
 
     total_points = match_score_points + group_standings_points + knockout_progression_points
     return {
@@ -3011,11 +3011,11 @@ def render_rules() -> None:
         | &nbsp;&nbsp;&nbsp;Correct home-team goals per match | 1 |
         | &nbsp;&nbsp;&nbsp;Correct away-team goals per match | 1 |
         | **End results** |  |
-        | &nbsp;&nbsp;&nbsp;Correct World Cup winner | 25 |
-        | &nbsp;&nbsp;&nbsp;Correct finalist, per team | 15 |
-        | &nbsp;&nbsp;&nbsp;Correct semi-finalist, per team | 10 |
-        | &nbsp;&nbsp;&nbsp;Correct quarter-finalist, per team | 5 |
-        | &nbsp;&nbsp;&nbsp;Correct round-of-16 team, per team | 3 |
+        | &nbsp;&nbsp;&nbsp;Correct World Cup winner | 30 |
+        | &nbsp;&nbsp;&nbsp;Correct finalist, per team | 20 |
+        | &nbsp;&nbsp;&nbsp;Correct semi-finalist, per team | 15 |
+        | &nbsp;&nbsp;&nbsp;Correct quarter-finalist, per team | 10 |
+        | &nbsp;&nbsp;&nbsp;Correct round-of-16 team, per team | 5 |
         """
     )
     st.markdown('<div class="rules-section-gap"></div>', unsafe_allow_html=True)
@@ -3947,11 +3947,11 @@ def render_endgame_scenarios(
     remaining_matches = len(matches) - len(completed_ids)
     incomplete_groups = sum(0 if group_is_complete(group, matches, results, teams) else 1 for group in GROUPS)
     future_stage_bonus = 0
-    for stage, stage_points in [("round_of_16", 3), ("quarter_final", 5), ("semi_final", 10), ("final", 15)]:
+    for stage, stage_points in [("round_of_16", 5), ("quarter_final", 10), ("semi_final", 15), ("final", 20)]:
         if not stage_entrants(actual_state["resolved_matches"], stage):
             future_stage_bonus += len(matches[matches["stage"].eq(stage)]) * 2 * stage_points
     if not actual_state["winners"].get("M104"):
-        future_stage_bonus += 25
+        future_stage_bonus += 30
     remaining_possible = remaining_matches * 5 + incomplete_groups * 20 + future_stage_bonus
     leader_points = int(snapshot["total_points"].max()) if not snapshot.empty else 0
     rows = []
