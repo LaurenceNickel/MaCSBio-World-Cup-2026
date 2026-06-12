@@ -3694,8 +3694,6 @@ def render_per_match_scores(
         st.subheader("Most Common Predicted Score")
         score_table = pd.DataFrame({"Prediction": list(score_counts), "Count": list(score_counts.values())}).sort_values("Count", ascending=False)
         render_padded_bar_chart(score_table, x="Prediction", y="Count")
-        unique_count = int((score_table["Count"] == 1).sum())
-        st.caption(f"Unique predicted scores: {unique_count}")
 
 
 def render_per_user_scores(
@@ -3721,9 +3719,11 @@ def render_per_user_scores(
     with ai_col:
         selected_ais = st.multiselect("AI predictions", ai_names, key="per_user_ai")
     phase = st.selectbox("Phase", ["Group stage", "Knockout phase"], key="per_user_phase")
-    selected = [participant for participant in humans if participant["user_name"] in selected_humans] + [
-        participant for participant in ais if participant["user_name"] in selected_ais
-    ]
+    selected = sorted(
+        [participant for participant in humans if participant["user_name"] in selected_humans]
+        + [participant for participant in ais if participant["user_name"] in selected_ais],
+        key=lambda participant: participant["user_name"].lower(),
+    )
     stage_filter = [GROUP_STAGE] if phase == "Group stage" else KNOCKOUT_STAGES
     rows = []
     actual_rows = score_lookup(results)
