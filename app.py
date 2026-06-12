@@ -3639,7 +3639,11 @@ def render_per_match_scores(
         selected_humans = st.multiselect("Users", human_names, default=human_names, key="per_match_users")
     with ai_col:
         selected_ais = st.multiselect("AI predictions", ai_names, key="per_match_ai")
-    participants = [p for p in humans if p["user_name"] in selected_humans] + [p for p in ais if p["user_name"] in selected_ais]
+    participants = sorted(
+        [p for p in humans if p["user_name"] in selected_humans]
+        + [p for p in ais if p["user_name"] in selected_ais],
+        key=lambda participant: participant["user_name"].lower(),
+    )
     match = matches[matches["match_id"].eq(selected_match_id)].iloc[0]
     scoped_results = results_through_match(results, matches, selected_match_id)
     actual_state = derive_tournament_state(teams, matches, scoped_results, knockout_matchups, third_place_combinations, use_cards=True)
