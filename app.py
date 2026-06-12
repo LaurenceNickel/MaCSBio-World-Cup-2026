@@ -701,6 +701,7 @@ def apply_visual_theme() -> None:
             text-align: left;
         }
 
+        .leaderboard-table th.bold,
         .leaderboard-table td.bold {
             font-weight: 800;
         }
@@ -3287,7 +3288,12 @@ def render_centered_dataframe(
     bold_lookup = {column.lower() for column in (bold_columns or set())}
     headers = []
     for column in table.columns:
-        class_attr = ' class="left"' if is_left_aligned_column(str(column), left_columns) else ""
+        classes = []
+        if is_left_aligned_column(str(column), left_columns):
+            classes.append("left")
+        if str(column).lower() in bold_lookup:
+            classes.append("bold")
+        class_attr = f' class="{" ".join(classes)}"' if classes else ""
         headers.append(f"<th{class_attr}>{html.escape(str(column))}</th>")
 
     body_rows = []
