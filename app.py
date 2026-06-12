@@ -3890,8 +3890,27 @@ def render_timelines(
         [participant["user_name"] for participant in humans + ais],
         key=str.lower,
     )
-    score_participants = [p for p in humans if p["user_name"] in selected_humans] + [p for p in ais if p["user_name"] in selected_ais]
-    score_timeline = timeline_table(score_participants, results, teams, matches, knockout_matchups, third_place_combinations)
+    full_rank_timeline = timeline_table(
+        humans, results, teams, matches, knockout_matchups, third_place_combinations
+    )
+    human_score_timeline = (
+        full_rank_timeline[full_rank_timeline["User name"].isin(selected_humans)]
+        if not full_rank_timeline.empty
+        else full_rank_timeline
+    )
+    selected_ai_participants = [p for p in ais if p["user_name"] in selected_ais]
+    ai_score_timeline = timeline_table(
+        selected_ai_participants,
+        results,
+        teams,
+        matches,
+        knockout_matchups,
+        third_place_combinations,
+    )
+    score_timeline = pd.concat(
+        [human_score_timeline, ai_score_timeline],
+        ignore_index=True,
+    )
     if not score_timeline.empty:
         st.subheader("Score Timeline")
         render_padded_line_chart(
@@ -3901,9 +3920,6 @@ def render_timelines(
             color="User name",
             color_domain=timeline_color_domain,
         )
-    full_rank_timeline = timeline_table(
-        humans, results, teams, matches, knockout_matchups, third_place_combinations
-    )
     rank_timeline = (
         full_rank_timeline[full_rank_timeline["User name"].isin(selected_humans)]
         if not full_rank_timeline.empty
@@ -4073,43 +4089,49 @@ def render_endgame_scenarios(
             st.write(f"{row['User name']} can still overtake the leader by gaining at least {gap + 1} more points than the current leader over the remaining scoring opportunities.")
 
 
-def render_leaderboard() -> None:
+def render_leaderboard(
+    users: pd.DataFrame,
+    results: pd.DataFrame,
+    teams: pd.DataFrame,
+    matches: pd.DataFrame,
+    knockout_matchups: pd.DataFrame,
+    third_place_combinations: pd.DataFrame,
+) -> None:
     st.header("Leaderboard")
-    ensure_data_files()
-    teams = read_csv(TEAMS_FILE)
-    matches = read_csv(MATCHES_FILE)
-    results = normalize_results(read_csv(RESULTS_FILE))
-    users = normalize_users(read_csv(USERS_FILE))
-    knockout_matchups = read_csv(KNOCKOUT_MATCHUPS_FILE)
-    third_place_combinations = read_csv(THIRD_PLACE_COMBINATIONS_FILE)
-
-    tabs = st.tabs(
-        [
-            "Leaderboard",
-            "Additional Rankings",
-            "Per Match Scores",
-            "Per User Scores",
-            "Timelines",
-            "Human vs AI",
-            "Prediction Analysis",
-            "Endgame Scenarios",
-        ]
+    sections = [
+        "Leaderboard",
+        "Additional Rankings",
+        "Per Match Scores",
+        "Per User Scores",
+        "Timelines",
+        "Human vs AI",
+        "Prediction Analysis",
+        "Endgame Scenarios",
+    ]
+    selected_section = st.segmented_control(
+        "Leaderboard section",
+        sections,
+        default=sections[0],
+        required=True,
+        key="leaderboard_section",
+        label_visibility="collapsed",
+        width="stretch",
     )
-    with tabs[0]:
+    if selected_section == "Leaderboard":
         render_default_leaderboard(users, results, teams, matches, knockout_matchups, third_place_combinations)
-    with tabs[1]:
+    elif selected_section == "Additional Rankings":
         render_additional_rankings(users, results, teams, matches, knockout_matchups, third_place_combinations)
-    with tabs[2]:
+    elif selected_section == "Per Match Scores":
         render_per_match_scores(users, results, teams, matches, knockout_matchups, third_place_combinations)
-    with tabs[3]:
+    elif selected_section == "Per User Scores":
         render_per_user_scores(users, results, teams, matches, knockout_matchups, third_place_combinations)
-    with tabs[4]:
+    elif selected_section == "Timelines":
         render_timelines(users, results, teams, matches, knockout_matchups, third_place_combinations)
-    with tabs[5]:
+    elif selected_section == "Human vs AI":
         render_human_vs_ai(users, results, teams, matches, knockout_matchups, third_place_combinations)
-    with tabs[6]:
+    elif selected_section == "Prediction Analysis":
         render_prediction_analysis(users, teams, matches, knockout_matchups, third_place_combinations)
-    with tabs[7]:
+    elif selected_section == "Endgame Scenarios":
         render_endgame_scenarios(users, results, teams, matches, knockout_matchups, third_place_combinations)
 
 
@@ -4164,7 +4186,7 @@ def main() -> None:
     elif page == "Results":
         render_results(teams, matches, results, knockout_matchups, third_place_combinations)
     elif page == "Leaderboard":
-        render_leaderboard()
+        render_leaderboard(users, results, teams, matches, knockout_matchups, third_place_combinations)
 
 
 def render_google_sheets_rate_limit_dialog() -> None:
