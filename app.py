@@ -104,6 +104,29 @@ DEFAULT_THEME = {
     "border": "#d7e1ea",
 }
 
+TIMELINE_COLORS = [
+    "#4e79a7",
+    "#a0cbe8",
+    "#f28e2b",
+    "#ffbe7d",
+    "#59a14f",
+    "#8cd17d",
+    "#b6992d",
+    "#f1ce63",
+    "#499894",
+    "#86bcb6",
+    "#e15759",
+    "#ff9d9a",
+    "#79706e",
+    "#bab0ac",
+    "#d37295",
+    "#fabfd2",
+    "#b07aa1",
+    "#d4a6c8",
+    "#9d7660",
+    "#d7b5a6",
+]
+
 
 def ensure_csv_columns(path: Path, columns: list[str]) -> None:
     if not path.exists():
@@ -3431,6 +3454,39 @@ def render_padded_bar_chart(table: pd.DataFrame, x: str, y: str) -> None:
         st.markdown("</div>", unsafe_allow_html=True)
 
 
+def render_chart_with_scrollable_legend(
+    chart: alt.Chart,
+    labels: list[str],
+    color_domain: list[str],
+) -> None:
+    color_by_label = {
+        label: TIMELINE_COLORS[index % len(TIMELINE_COLORS)]
+        for index, label in enumerate(color_domain)
+    }
+    legend_items = "".join(
+        (
+            '<div style="display:flex;align-items:center;gap:0.45rem;margin:0.35rem 0;">'
+            f'<span style="width:0.75rem;height:0.75rem;border-radius:50%;'
+            f'background:{color_by_label[label]};flex:0 0 auto;"></span>'
+            f"<span>{html.escape(label)}</span></div>"
+        )
+        for label in labels
+    )
+    chart_col, legend_col = st.columns([0.86, 0.14], gap="small")
+    with chart_col:
+        st.altair_chart(chart, width="stretch")
+    with legend_col:
+        st.markdown(
+            (
+                '<div style="height:330px;display:flex;align-items:center;">'
+                '<div style="width:100%;max-height:240px;overflow-y:auto;'
+                'padding-right:0.35rem;color:#5b6d7d;">'
+                f"{legend_items}</div></div>"
+            ),
+            unsafe_allow_html=True,
+        )
+
+
 def render_padded_line_chart(
     table: pd.DataFrame,
     x: str,
@@ -3438,7 +3494,14 @@ def render_padded_line_chart(
     color: str,
     reverse_y: bool = False,
     y_values: list[int] | None = None,
+    color_domain: list[str] | None = None,
 ) -> None:
+    labels = sorted(table[color].dropna().astype(str).unique(), key=str.lower)
+    color_domain = color_domain or labels
+    color_range = [
+        TIMELINE_COLORS[index % len(TIMELINE_COLORS)]
+        for index in range(len(color_domain))
+    ]
     if reverse_y and y_values:
         y_scale = alt.Scale(domain=[max(y_values), min(y_values)], nice=False)
     elif reverse_y:
@@ -3452,7 +3515,11 @@ def render_padded_line_chart(
         .encode(
             x=alt.X(f"{x}:N", title=x, sort=None),
             y=alt.Y(f"{y}:Q", title=y, scale=y_scale, axis=y_axis),
-            color=alt.Color(f"{color}:N", legend=alt.Legend(title=None, clipHeight=240)),
+            color=alt.Color(
+                f"{color}:N",
+                legend=None,
+                scale=alt.Scale(domain=color_domain, range=color_range),
+            ),
             tooltip=[x, y, color],
         )
         .properties(height=330)
@@ -3463,16 +3530,21 @@ def render_padded_line_chart(
     )
     with st.container():
         st.markdown('<div class="figure-pad">', unsafe_allow_html=True)
-        st.altair_chart(chart, width="stretch")
+        render_chart_with_scrollable_legend(chart, labels, color_domain)
         st.markdown("</div>", unsafe_allow_html=True)
 
 
-def render_top_five_over_time_chart(table: pd.DataFrame) -> None:
+def render_top_five_over_time_chart(table: pd.DataFrame, color_domain: list[str]) -> None:
     if table.empty:
         return
     top_five = table[table["Rank"] <= 5].copy()
     if top_five.empty:
         return
+    labels = sorted(top_five["User name"].dropna().astype(str).unique(), key=str.lower)
+    color_range = [
+        TIMELINE_COLORS[index % len(TIMELINE_COLORS)]
+        for index in range(len(color_domain))
+    ]
     chart = (
         alt.Chart(top_five)
         .mark_circle(size=95)
@@ -3484,7 +3556,11 @@ def render_top_five_over_time_chart(table: pd.DataFrame) -> None:
                 scale=alt.Scale(domain=[5, 1], nice=False),
                 axis=alt.Axis(values=[1, 2, 3, 4, 5], format="d"),
             ),
-            color=alt.Color("User name:N", legend=alt.Legend(title=None, clipHeight=240)),
+            color=alt.Color(
+                "User name:N",
+                legend=None,
+                scale=alt.Scale(domain=color_domain, range=color_range),
+            ),
             size=alt.Size("Points:Q", title="Points", legend=alt.Legend(title="Points")),
             tooltip=["Match", "User name", "Points", "Rank"],
         )
@@ -3496,7 +3572,7 @@ def render_top_five_over_time_chart(table: pd.DataFrame) -> None:
     )
     with st.container():
         st.markdown('<div class="figure-pad">', unsafe_allow_html=True)
-        st.altair_chart(chart, width="stretch")
+        render_chart_with_scrollable_legend(chart, labels, color_domain)
         st.markdown("</div>", unsafe_allow_html=True)
 
 
@@ -3810,11 +3886,21 @@ def render_timelines(
         selected_humans = st.multiselect("Users", human_names, default=human_names[: min(5, len(human_names))], key="timeline_users")
     with ai_col:
         selected_ais = st.multiselect("AI predictions", ai_names, key="timeline_ai")
+    timeline_color_domain = sorted(
+        [participant["user_name"] for participant in humans + ais],
+        key=str.lower,
+    )
     score_participants = [p for p in humans if p["user_name"] in selected_humans] + [p for p in ais if p["user_name"] in selected_ais]
     score_timeline = timeline_table(score_participants, results, teams, matches, knockout_matchups, third_place_combinations)
     if not score_timeline.empty:
         st.subheader("Score Timeline")
-        render_padded_line_chart(score_timeline, x="Match", y="Points", color="User name")
+        render_padded_line_chart(
+            score_timeline,
+            x="Match",
+            y="Points",
+            color="User name",
+            color_domain=timeline_color_domain,
+        )
     full_rank_timeline = timeline_table(
         humans, results, teams, matches, knockout_matchups, third_place_combinations
     )
@@ -3834,10 +3920,11 @@ def render_timelines(
             color="User name",
             reverse_y=True,
             y_values=rank_ticks,
+            color_domain=timeline_color_domain,
         )
     if not full_rank_timeline.empty:
         st.subheader("Top 5 Over Time")
-        render_top_five_over_time_chart(full_rank_timeline)
+        render_top_five_over_time_chart(full_rank_timeline, timeline_color_domain)
 
 
 def render_human_vs_ai(
