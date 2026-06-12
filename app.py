@@ -3452,7 +3452,7 @@ def render_padded_line_chart(
         .encode(
             x=alt.X(f"{x}:N", title=x, sort=None),
             y=alt.Y(f"{y}:Q", title=y, scale=y_scale, axis=y_axis),
-            color=alt.Color(f"{color}:N", title=None),
+            color=alt.Color(f"{color}:N", legend=alt.Legend(title=None, clipHeight=240)),
             tooltip=[x, y, color],
         )
         .properties(height=330)
@@ -3484,7 +3484,7 @@ def render_top_five_over_time_chart(table: pd.DataFrame) -> None:
                 scale=alt.Scale(domain=[5, 1], nice=False),
                 axis=alt.Axis(values=[1, 2, 3, 4, 5], format="d"),
             ),
-            color=alt.Color("User name:N", title=None),
+            color=alt.Color("User name:N", legend=alt.Legend(title=None, clipHeight=240)),
             size=alt.Size("Points:Q", title="Points", legend=alt.Legend(title="Points")),
             tooltip=["Match", "User name", "Points", "Rank"],
         )
