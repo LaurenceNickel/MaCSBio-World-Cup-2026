@@ -3458,20 +3458,31 @@ def render_chart_with_scrollable_legend(
     chart: alt.Chart,
     labels: list[str],
     color_domain: list[str],
+    participant_types: dict[str, str],
 ) -> None:
     color_by_label = {
         label: TIMELINE_COLORS[index % len(TIMELINE_COLORS)]
         for index, label in enumerate(color_domain)
     }
-    legend_items = "".join(
-        (
+    legend_items = []
+    for label in labels:
+        color = color_by_label[label]
+        if participant_types.get(label) == "AI":
+            marker = (
+                '<span style="width:0;height:0;border-left:0.42rem solid transparent;'
+                'border-right:0.42rem solid transparent;'
+                f'border-bottom:0.75rem solid {color};flex:0 0 auto;"></span>'
+            )
+        else:
+            marker = (
+                f'<span style="width:0.75rem;height:0.75rem;border-radius:50%;'
+                f'background:{color};flex:0 0 auto;"></span>'
+            )
+        legend_items.append(
             '<div style="display:flex;align-items:center;gap:0.45rem;margin:0.35rem 0;">'
-            f'<span style="width:0.75rem;height:0.75rem;border-radius:50%;'
-            f'background:{color_by_label[label]};flex:0 0 auto;"></span>'
-            f"<span>{html.escape(label)}</span></div>"
+            f"{marker}<span>{html.escape(label)}</span></div>"
         )
-        for label in labels
-    )
+    legend_html = "".join(legend_items)
     chart_col, legend_col = st.columns([0.86, 0.14], gap="small")
     with chart_col:
         st.altair_chart(chart, width="stretch")
@@ -3481,7 +3492,7 @@ def render_chart_with_scrollable_legend(
                 '<div style="height:330px;display:flex;align-items:center;">'
                 '<div style="width:100%;max-height:240px;overflow-y:auto;'
                 'padding-right:0.35rem;color:#5b6d7d;">'
-                f"{legend_items}</div></div>"
+                f"{legend_html}</div></div>"
             ),
             unsafe_allow_html=True,
         )
@@ -3497,6 +3508,13 @@ def render_padded_line_chart(
     color_domain: list[str] | None = None,
 ) -> None:
     labels = sorted(table[color].dropna().astype(str).unique(), key=str.lower)
+    participant_types = (
+        table[[color, "Participant type"]]
+        .drop_duplicates(subset=[color])
+        .set_index(color)["Participant type"]
+        .astype(str)
+        .to_dict()
+    )
     color_domain = color_domain or labels
     color_range = [
         TIMELINE_COLORS[index % len(TIMELINE_COLORS)]
@@ -3509,19 +3527,24 @@ def render_padded_line_chart(
     else:
         y_scale = alt.Scale()
     y_axis = alt.Axis(values=y_values, format="d") if y_values else alt.Axis()
+    base = alt.Chart(table).encode(
+        x=alt.X(f"{x}:N", title=x, sort=None),
+        y=alt.Y(f"{y}:Q", title=y, scale=y_scale, axis=y_axis),
+        color=alt.Color(
+            f"{color}:N",
+            legend=None,
+            scale=alt.Scale(domain=color_domain, range=color_range),
+        ),
+        tooltip=[x, y, color, "Participant type"],
+    )
     chart = (
-        alt.Chart(table)
-        .mark_line(point=True)
-        .encode(
-            x=alt.X(f"{x}:N", title=x, sort=None),
-            y=alt.Y(f"{y}:Q", title=y, scale=y_scale, axis=y_axis),
-            color=alt.Color(
-                f"{color}:N",
+        (base.mark_line() + base.mark_point(size=65).encode(
+            shape=alt.Shape(
+                "Participant type:N",
                 legend=None,
-                scale=alt.Scale(domain=color_domain, range=color_range),
-            ),
-            tooltip=[x, y, color],
-        )
+                scale=alt.Scale(domain=["Human", "AI"], range=["circle", "triangle-up"]),
+            )
+        ))
         .properties(height=330)
         .configure_view(strokeWidth=0)
         .configure_axis(labelColor=DEFAULT_THEME["primary"], titleColor=DEFAULT_THEME["primary"], tickColor=DEFAULT_THEME["primary"], domainColor=DEFAULT_THEME["primary"])
@@ -3530,7 +3553,7 @@ def render_padded_line_chart(
     )
     with st.container():
         st.markdown('<div class="figure-pad">', unsafe_allow_html=True)
-        render_chart_with_scrollable_legend(chart, labels, color_domain)
+        render_chart_with_scrollable_legend(chart, labels, color_domain, participant_types)
         st.markdown("</div>", unsafe_allow_html=True)
 
 
@@ -3541,13 +3564,20 @@ def render_top_five_over_time_chart(table: pd.DataFrame, color_domain: list[str]
     if top_five.empty:
         return
     labels = sorted(top_five["User name"].dropna().astype(str).unique(), key=str.lower)
+    participant_types = (
+        top_five[["User name", "Participant type"]]
+        .drop_duplicates(subset=["User name"])
+        .set_index("User name")["Participant type"]
+        .astype(str)
+        .to_dict()
+    )
     color_range = [
         TIMELINE_COLORS[index % len(TIMELINE_COLORS)]
         for index in range(len(color_domain))
     ]
     chart = (
         alt.Chart(top_five)
-        .mark_circle(size=95)
+        .mark_point(size=95)
         .encode(
             x=alt.X("Match:N", title="Match", sort=None),
             y=alt.Y(
@@ -3561,8 +3591,13 @@ def render_top_five_over_time_chart(table: pd.DataFrame, color_domain: list[str]
                 legend=None,
                 scale=alt.Scale(domain=color_domain, range=color_range),
             ),
+            shape=alt.Shape(
+                "Participant type:N",
+                legend=None,
+                scale=alt.Scale(domain=["Human", "AI"], range=["circle", "triangle-up"]),
+            ),
             size=alt.Size("Points:Q", title="Points", legend=alt.Legend(title="Points")),
-            tooltip=["Match", "User name", "Points", "Rank"],
+            tooltip=["Match", "User name", "Participant type", "Points", "Rank"],
         )
         .properties(height=330)
         .configure_view(strokeWidth=0)
@@ -3572,7 +3607,7 @@ def render_top_five_over_time_chart(table: pd.DataFrame, color_domain: list[str]
     )
     with st.container():
         st.markdown('<div class="figure-pad">', unsafe_allow_html=True)
-        render_chart_with_scrollable_legend(chart, labels, color_domain)
+        render_chart_with_scrollable_legend(chart, labels, color_domain, participant_types)
         st.markdown("</div>", unsafe_allow_html=True)
 
 
@@ -3865,7 +3900,15 @@ def timeline_table(
     for match_id in completed_match_ids(results, matches):
         snapshot = snapshot_with_rank_change(participants, results, matches, match_id, teams, knockout_matchups, third_place_combinations)
         for _, row in snapshot.iterrows():
-            rows.append({"Match": match_id, "User name": row["user_name"], "Points": row["total_points"], "Rank": row["rank"]})
+            rows.append(
+                {
+                    "Match": match_id,
+                    "User name": row["user_name"],
+                    "Participant type": "AI" if row["is_ai"] else "Human",
+                    "Points": row["total_points"],
+                    "Rank": row["rank"],
+                }
+            )
     return pd.DataFrame(rows)
 
 
