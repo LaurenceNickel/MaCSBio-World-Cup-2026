@@ -3815,8 +3815,14 @@ def render_timelines(
     if not score_timeline.empty:
         st.subheader("Score Timeline")
         render_padded_line_chart(score_timeline, x="Match", y="Points", color="User name")
-    rank_participants = [p for p in humans if p["user_name"] in selected_humans]
-    rank_timeline = timeline_table(rank_participants, results, teams, matches, knockout_matchups, third_place_combinations)
+    full_rank_timeline = timeline_table(
+        humans, results, teams, matches, knockout_matchups, third_place_combinations
+    )
+    rank_timeline = (
+        full_rank_timeline[full_rank_timeline["User name"].isin(selected_humans)]
+        if not full_rank_timeline.empty
+        else full_rank_timeline
+    )
     if not rank_timeline.empty:
         st.subheader("Rank Timeline")
         max_rank = max(1, int(rank_timeline["Rank"].max()))
@@ -3829,9 +3835,9 @@ def render_timelines(
             reverse_y=True,
             y_values=rank_ticks,
         )
-        st.caption("Rank 1 is shown at the top.")
+    if not full_rank_timeline.empty:
         st.subheader("Top 5 Over Time")
-        render_top_five_over_time_chart(rank_timeline)
+        render_top_five_over_time_chart(full_rank_timeline)
 
 
 def render_human_vs_ai(
