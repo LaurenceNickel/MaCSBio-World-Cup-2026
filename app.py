@@ -3662,7 +3662,10 @@ def render_additional_rankings(
 
     st.subheader("Most Correct Winners")
     winners = add_rank(snapshot[["user_name", "correct_winners"]].rename(columns={"correct_winners": "Correct winners"}), "Correct winners")
-    render_centered_dataframe(winners.rename(columns={"rank": "Rank", "user_name": "User name"}))
+    render_centered_dataframe(
+        winners.rename(columns={"rank": "Rank", "user_name": "User name"}),
+        bold_columns={"Correct winners"},
+    )
 
     st.subheader("Most Exact Score Components")
     components = add_rank(
@@ -3675,17 +3678,29 @@ def render_additional_rankings(
         ),
         "Total exact goal components",
     )
-    render_centered_dataframe(components.rename(columns={"rank": "Rank", "user_name": "User name"}))
+    render_centered_dataframe(
+        components.rename(columns={"rank": "Rank", "user_name": "User name"}),
+        bold_columns={"Total exact goal components"},
+    )
 
     st.subheader("Most Exact Scores")
     exact = add_rank(snapshot[["user_name", "exact_scores"]].rename(columns={"exact_scores": "Exact scores"}), "Exact scores")
-    render_centered_dataframe(exact.rename(columns={"rank": "Rank", "user_name": "User name"}))
+    render_centered_dataframe(
+        exact.rename(columns={"rank": "Rank", "user_name": "User name"}),
+        bold_columns={"Exact scores"},
+    )
 
     upset_rows = group_match_predictability(participants, results, teams, matches)
     st.subheader("Top 10 Biggest Upsets")
-    render_centered_dataframe(upset_rows.head(10))
+    render_centered_dataframe(
+        upset_rows.head(10),
+        bold_columns={"Actual winner predicted by (%)"},
+    )
     st.subheader("Top 10 Most Predictable Matches")
-    render_centered_dataframe(upset_rows.sort_values("Actual winner predicted by (%)", ascending=False).head(10))
+    render_centered_dataframe(
+        upset_rows.sort_values("Actual winner predicted by (%)", ascending=False).head(10),
+        bold_columns={"Actual winner predicted by (%)"},
+    )
 
 
 def group_match_predictability(
@@ -3718,10 +3733,9 @@ def group_match_predictability(
                 "Match": f"{match_id}: {team_name(match['home_team'], teams)} vs {team_name(match['away_team'], teams)}",
                 "Actual": f"{actual[0]}-{actual[1]}",
                 "Actual winner predicted by (%)": round(100 * correct / total, 1),
-                "Prediction count": total,
             }
         )
-    columns = ["Match", "Actual", "Actual winner predicted by (%)", "Prediction count"]
+    columns = ["Match", "Actual", "Actual winner predicted by (%)"]
     if not rows:
         return pd.DataFrame(columns=columns)
     return pd.DataFrame(rows, columns=columns).sort_values("Actual winner predicted by (%)", ascending=True)
@@ -3807,7 +3821,11 @@ def render_per_match_scores(
                 "Points earned": points["total_points"],
             }
         )
-    render_centered_dataframe(pd.DataFrame(rows), {"User name"})
+    render_centered_dataframe(
+        pd.DataFrame(rows),
+        {"User name"},
+        bold_columns={"Actual score"},
+    )
     if matchup_counts:
         st.subheader("Most Common Predicted Matchup")
         matchup_table = pd.DataFrame(
@@ -3920,7 +3938,10 @@ def render_per_user_scores(
                 row[f"{participant['user_name']} matchup"] = f"{home} vs {away}"
                 row[f"{participant['user_name']} score"] = prediction_score_text(prediction_row)
         rows.append(row)
-    render_centered_dataframe(pd.DataFrame(rows))
+    render_centered_dataframe(
+        pd.DataFrame(rows),
+        bold_columns={"Actual score"},
+    )
 
 
 @st.cache_data(show_spinner=False, hash_funcs={pd.DataFrame: dataframe_cache_key})
@@ -4059,7 +4080,10 @@ def render_human_vs_ai(
             }
         )
     st.subheader("Human vs AI Summary")
-    render_centered_dataframe(pd.DataFrame(metrics))
+    render_centered_dataframe(
+        pd.DataFrame(metrics),
+        bold_columns={"Average score"},
+    )
     st.subheader("Leaderboard Including AI")
     display_leaderboard_table(snapshot, include_change=False, highlight_ai=True)
 
