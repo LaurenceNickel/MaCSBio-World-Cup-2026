@@ -3862,8 +3862,10 @@ def render_human_vs_ai(
                 "Group": label,
                 "Average score": round(float(subset["total_points"].mean()), 1) if not subset.empty else 0,
                 "Best score": int(subset["total_points"].max()) if not subset.empty else 0,
-                "Correct winners": int(subset["correct_winners"].sum()) if not subset.empty else 0,
-                "Exact score components": int(subset["exact_goal_components"].sum()) if not subset.empty else 0,
+                "Correct winners per user": round(float(subset["correct_winners"].mean()), 1) if not subset.empty else 0,
+                "Exact score components per user": (
+                    round(float(subset["exact_goal_components"].mean()), 1) if not subset.empty else 0
+                ),
             }
         )
     st.subheader("Human vs AI Summary")
@@ -3896,7 +3898,7 @@ def render_prediction_analysis(
     with human_col:
         include_humans = st.checkbox("Humans", value=True, key="prediction_analysis_include_humans")
     with ai_col:
-        include_ai = st.checkbox("AI predictions", value=True, key="prediction_analysis_include_ai")
+        include_ai = st.checkbox("AI predictions", value=False, key="prediction_analysis_include_ai")
     if not include_humans and not include_ai:
         st.info("Select at least one category: Humans or AI predictions.")
         return
