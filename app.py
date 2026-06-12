@@ -3757,19 +3757,36 @@ def render_per_match_scores(
     )
     match = matches[matches["match_id"].eq(selected_match_id)].iloc[0]
     scoped_results = results_through_match(results, matches, selected_match_id)
-    actual_state = derive_tournament_state(teams, matches, scoped_results, knockout_matchups, third_place_combinations, use_cards=True)
     actual_rows = score_lookup(scoped_results)
-    actual_resolved_rows = score_lookup(actual_state["resolved_matches"])
+    is_knockout_match = str(match["stage"]) in KNOCKOUT_STAGES
+    actual_resolved_rows = {}
+    if is_knockout_match:
+        actual_state = derive_tournament_state(
+            teams,
+            matches,
+            scoped_results,
+            knockout_matchups,
+            third_place_combinations,
+            use_cards=True,
+        )
+        actual_resolved_rows = score_lookup(actual_state["resolved_matches"])
     rows = []
     winner_counts: dict[str, int] = {}
     matchup_counts: dict[str, int] = {}
     score_counts: dict[str, int] = {}
     for participant in participants:
-        prediction_state = derive_tournament_state(
-            teams, matches, participant["predictions"], knockout_matchups, third_place_combinations, use_cards=False
-        )
         prediction_rows = score_lookup(participant["predictions"])
-        prediction_resolved_rows = score_lookup(prediction_state["resolved_matches"])
+        prediction_resolved_rows = {}
+        if is_knockout_match:
+            prediction_state = derive_tournament_state(
+                teams,
+                matches,
+                participant["predictions"],
+                knockout_matchups,
+                third_place_combinations,
+                use_cards=False,
+            )
+            prediction_resolved_rows = score_lookup(prediction_state["resolved_matches"])
         points = match_score_points_for_match(
             match, prediction_rows, actual_rows, prediction_resolved_rows, actual_resolved_rows
         )
@@ -3779,7 +3796,7 @@ def render_per_match_scores(
         score_text = prediction_score_text(prediction)
         winner_counts[winner] = winner_counts.get(winner, 0) + 1
         score_counts[score_text] = score_counts.get(score_text, 0) + 1
-        if str(match["stage"]) in KNOCKOUT_STAGES:
+        if is_knockout_match:
             matchup = matchup_text_from_resolved(resolved_row, teams)
             matchup_counts[matchup] = matchup_counts.get(matchup, 0) + 1
         rows.append(
@@ -3838,16 +3855,33 @@ def render_per_user_scores(
     stage_filter = [GROUP_STAGE] if phase == "Group stage" else KNOCKOUT_STAGES
     rows = []
     actual_rows = score_lookup(results)
-    actual_state = derive_tournament_state(
-        teams, matches, results, knockout_matchups, third_place_combinations, use_cards=True
-    )
-    actual_resolved_rows = score_lookup(actual_state["resolved_matches"])
-    prediction_states = {
-        participant["user_id"]: derive_tournament_state(
-            teams, matches, participant["predictions"], knockout_matchups, third_place_combinations, use_cards=False
-        )
+    prediction_rows = {
+        participant["user_id"]: score_lookup(participant["predictions"])
         for participant in selected
     }
+    actual_resolved_rows = {}
+    prediction_states = {}
+    prediction_resolved_rows = {}
+    if phase == "Knockout phase":
+        actual_state = derive_tournament_state(
+            teams, matches, results, knockout_matchups, third_place_combinations, use_cards=True
+        )
+        actual_resolved_rows = score_lookup(actual_state["resolved_matches"])
+        prediction_states = {
+            participant["user_id"]: derive_tournament_state(
+                teams,
+                matches,
+                participant["predictions"],
+                knockout_matchups,
+                third_place_combinations,
+                use_cards=False,
+            )
+            for participant in selected
+        }
+        prediction_resolved_rows = {
+            user_id: score_lookup(state["resolved_matches"])
+            for user_id, state in prediction_states.items()
+        }
     for _, match in matches[matches["stage"].isin(stage_filter)].iterrows():
         if phase == "Group stage":
             row = {
@@ -3856,7 +3890,9 @@ def render_per_user_scores(
                 "Actual score": prediction_score_text(actual_rows.get(match["match_id"])),
             }
             for participant in selected:
-                row[participant["user_name"]] = prediction_score_text(score_lookup(participant["predictions"]).get(match["match_id"]))
+                row[participant["user_name"]] = prediction_score_text(
+                    prediction_rows[participant["user_id"]].get(match["match_id"])
+                )
         else:
             actual_score = completed_score(actual_rows.get(match["match_id"]))
             row = {
@@ -3870,9 +3906,8 @@ def render_per_user_scores(
                 "Actual score": prediction_score_text(actual_rows.get(match["match_id"])),
             }
             for participant in selected:
-                prediction_state = prediction_states[participant["user_id"]]
-                resolved = score_lookup(prediction_state["resolved_matches"]).get(match["match_id"], {})
-                prediction_row = score_lookup(participant["predictions"]).get(match["match_id"])
+                resolved = prediction_resolved_rows[participant["user_id"]].get(match["match_id"], {})
+                prediction_row = prediction_rows[participant["user_id"]].get(match["match_id"])
                 predicted_score = completed_score(prediction_row)
                 home = team_name(str(resolved.get("home_team", "")), teams)
                 away = team_name(str(resolved.get("away_team", "")), teams)
@@ -3888,6 +3923,7 @@ def render_per_user_scores(
     render_centered_dataframe(pd.DataFrame(rows))
 
 
+@st.cache_data(show_spinner=False, hash_funcs={pd.DataFrame: dataframe_cache_key})
 def timeline_table(
     participants: list[dict[str, Any]],
     results: pd.DataFrame,
@@ -3898,7 +3934,15 @@ def timeline_table(
 ) -> pd.DataFrame:
     rows = []
     for match_id in completed_match_ids(results, matches):
-        snapshot = snapshot_with_rank_change(participants, results, matches, match_id, teams, knockout_matchups, third_place_combinations)
+        scoped_results = results_through_match(results, matches, match_id)
+        snapshot = leaderboard_snapshot(
+            participants,
+            scoped_results,
+            teams,
+            matches,
+            knockout_matchups,
+            third_place_combinations,
+        )
         for _, row in snapshot.iterrows():
             rows.append(
                 {
