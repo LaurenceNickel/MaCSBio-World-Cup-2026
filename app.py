@@ -3563,65 +3563,6 @@ def render_padded_line_chart(
         st.markdown("</div>", unsafe_allow_html=True)
 
 
-def render_top_five_over_time_chart(table: pd.DataFrame, color_domain: list[str]) -> None:
-    if table.empty:
-        return
-    top_five_names = table.loc[table["Rank"] <= 5, "User name"].dropna().astype(str).unique()
-    if len(top_five_names) == 0:
-        return
-    rank_paths = table[table["User name"].isin(top_five_names)].copy()
-    labels = sorted(top_five_names, key=str.lower)
-    participant_types = (
-        rank_paths[["User name", "Participant type"]]
-        .drop_duplicates(subset=["User name"])
-        .set_index("User name")["Participant type"]
-        .astype(str)
-        .to_dict()
-    )
-    color_range = [
-        TIMELINE_COLORS[index % len(TIMELINE_COLORS)]
-        for index in range(len(color_domain))
-    ]
-    max_rank = max(5, int(rank_paths["Rank"].max()))
-    base = alt.Chart(rank_paths).encode(
-        x=alt.X("Match:N", title="Match", sort=None),
-        y=alt.Y(
-            "Rank:Q",
-            title="Rank",
-            scale=alt.Scale(domain=[max_rank, 1], nice=False),
-            axis=alt.Axis(values=list(range(1, max_rank + 1)), format="d"),
-        ),
-        color=alt.Color(
-            "User name:N",
-            legend=None,
-            scale=alt.Scale(domain=color_domain, range=color_range),
-        ),
-        detail="User name:N",
-        tooltip=["Match", "User name", "Participant type", "Points", "Rank"],
-    )
-    chart = (
-        (
-            base.mark_line(strokeWidth=2.5)
-            + base.mark_point(size=70, filled=True).encode(
-            shape=alt.Shape(
-                "Participant type:N",
-                legend=None,
-                scale=alt.Scale(domain=["Human", "AI"], range=["circle", "triangle-up"]),
-                )
-            )
-        )
-        .properties(height=380)
-        .configure_view(strokeWidth=0)
-        .configure_axis(labelColor=DEFAULT_THEME["primary"], titleColor=DEFAULT_THEME["primary"], tickColor=DEFAULT_THEME["primary"], domainColor=DEFAULT_THEME["primary"])
-        .configure_legend(labelColor=DEFAULT_THEME["primary"], titleColor=DEFAULT_THEME["primary"])
-        .configure(background="transparent")
-    )
-    with st.container():
-        st.markdown('<div class="figure-pad">', unsafe_allow_html=True)
-        render_chart_with_scrollable_legend(chart, labels, color_domain, participant_types)
-        st.markdown("</div>", unsafe_allow_html=True)
-
-
 def render_default_leaderboard(
     users: pd.DataFrame,
     results: pd.DataFrame,
@@ -3671,11 +3612,16 @@ def render_additional_rankings(
         st.info("Additional rankings will appear once participants have submitted predictions.")
         return
 
-    st.subheader("Most Correct Winners")
-    winners = add_rank(snapshot[["user_name", "correct_winners"]].rename(columns={"correct_winners": "Correct winners"}), "Correct winners")
+    st.subheader("Most Correct Outcomes")
+    winners = add_rank(
+        snapshot[["user_name", "correct_winners"]].rename(
+            columns={"correct_winners": "Correct outcomes"}
+        ),
+        "Correct outcomes",
+    )
     render_centered_dataframe(
         winners.rename(columns={"rank": "Rank", "user_name": "User name"}),
-        bold_columns={"Correct winners"},
+        bold_columns={"Correct outcomes"},
     )
 
     st.subheader("Most Exact Score Components")
@@ -3705,12 +3651,12 @@ def render_additional_rankings(
     st.subheader("Top 10 Biggest Upsets")
     render_centered_dataframe(
         upset_rows.head(10),
-        bold_columns={"Actual winner predicted by (%)"},
+        bold_columns={"Actual outcome predicted by (%)"},
     )
     st.subheader("Top 10 Most Predictable Matches")
     render_centered_dataframe(
-        upset_rows.sort_values("Actual winner predicted by (%)", ascending=False).head(10),
-        bold_columns={"Actual winner predicted by (%)"},
+        upset_rows.sort_values("Actual outcome predicted by (%)", ascending=False).head(10),
+        bold_columns={"Actual outcome predicted by (%)"},
     )
 
 
@@ -3739,17 +3685,26 @@ def group_match_predictability(
             correct += int(score_side(*predicted) == actual_side)
         if total == 0:
             continue
+        if actual_side == "draw":
+            outcome = "Draw"
+        elif actual_side == "home":
+            outcome = f"{team_name(match['home_team'], teams)} Win"
+        else:
+            outcome = f"{team_name(match['away_team'], teams)} Win"
         rows.append(
             {
-                "Match": f"{match_id}: {team_name(match['home_team'], teams)} vs {team_name(match['away_team'], teams)}",
-                "Actual": f"{actual[0]}-{actual[1]}",
-                "Actual winner predicted by (%)": round(100 * correct / total, 1),
+                "Match": (
+                    f"{match_id}: {team_name(match['home_team'], teams)} "
+                    f"{actual[0]}-{actual[1]} {team_name(match['away_team'], teams)}"
+                ),
+                "Outcome": outcome,
+                "Actual outcome predicted by (%)": round(100 * correct / total, 1),
             }
         )
-    columns = ["Match", "Actual", "Actual winner predicted by (%)"]
+    columns = ["Match", "Outcome", "Actual outcome predicted by (%)"]
     if not rows:
         return pd.DataFrame(columns=columns)
-    return pd.DataFrame(rows, columns=columns).sort_values("Actual winner predicted by (%)", ascending=True)
+    return pd.DataFrame(rows, columns=columns).sort_values("Actual outcome predicted by (%)", ascending=True)
 
 
 def per_match_score_options(
@@ -4144,11 +4099,6 @@ def render_timelines(
             y_values=rank_ticks,
             color_domain=timeline_color_domain,
         )
-    if not full_rank_timeline.empty:
-        st.subheader("Top 5 Rank Race")
-        render_top_five_over_time_chart(full_rank_timeline, timeline_color_domain)
-
-
 def render_human_vs_ai(
     users: pd.DataFrame,
     results: pd.DataFrame,
