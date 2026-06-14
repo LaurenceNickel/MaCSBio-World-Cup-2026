@@ -3566,12 +3566,13 @@ def render_padded_line_chart(
 def render_top_five_over_time_chart(table: pd.DataFrame, color_domain: list[str]) -> None:
     if table.empty:
         return
-    top_five = table[table["Rank"] <= 5].copy()
-    if top_five.empty:
+    top_five_names = table.loc[table["Rank"] <= 5, "User name"].dropna().astype(str).unique()
+    if len(top_five_names) == 0:
         return
-    labels = sorted(top_five["User name"].dropna().astype(str).unique(), key=str.lower)
+    rank_paths = table[table["User name"].isin(top_five_names)].copy()
+    labels = sorted(top_five_names, key=str.lower)
     participant_types = (
-        top_five[["User name", "Participant type"]]
+        rank_paths[["User name", "Participant type"]]
         .drop_duplicates(subset=["User name"])
         .set_index("User name")["Participant type"]
         .astype(str)
@@ -3581,31 +3582,35 @@ def render_top_five_over_time_chart(table: pd.DataFrame, color_domain: list[str]
         TIMELINE_COLORS[index % len(TIMELINE_COLORS)]
         for index in range(len(color_domain))
     ]
+    max_rank = max(5, int(rank_paths["Rank"].max()))
+    base = alt.Chart(rank_paths).encode(
+        x=alt.X("Match:N", title="Match", sort=None),
+        y=alt.Y(
+            "Rank:Q",
+            title="Rank",
+            scale=alt.Scale(domain=[max_rank, 1], nice=False),
+            axis=alt.Axis(values=list(range(1, max_rank + 1)), format="d"),
+        ),
+        color=alt.Color(
+            "User name:N",
+            legend=None,
+            scale=alt.Scale(domain=color_domain, range=color_range),
+        ),
+        detail="User name:N",
+        tooltip=["Match", "User name", "Participant type", "Points", "Rank"],
+    )
     chart = (
-        alt.Chart(top_five)
-        .mark_point(size=95)
-        .encode(
-            x=alt.X("Match:N", title="Match", sort=None),
-            y=alt.Y(
-                "Rank:Q",
-                title="Rank",
-                scale=alt.Scale(domain=[5, 1], nice=False),
-                axis=alt.Axis(values=[1, 2, 3, 4, 5], format="d"),
-            ),
-            color=alt.Color(
-                "User name:N",
-                legend=None,
-                scale=alt.Scale(domain=color_domain, range=color_range),
-            ),
+        (
+            base.mark_line(strokeWidth=2.5)
+            + base.mark_point(size=70, filled=True).encode(
             shape=alt.Shape(
                 "Participant type:N",
                 legend=None,
                 scale=alt.Scale(domain=["Human", "AI"], range=["circle", "triangle-up"]),
-            ),
-            size=alt.Size("Points:Q", title="Points", legend=alt.Legend(title="Points")),
-            tooltip=["Match", "User name", "Participant type", "Points", "Rank"],
+                )
+            )
         )
-        .properties(height=330)
+        .properties(height=380)
         .configure_view(strokeWidth=0)
         .configure_axis(labelColor=DEFAULT_THEME["primary"], titleColor=DEFAULT_THEME["primary"], tickColor=DEFAULT_THEME["primary"], domainColor=DEFAULT_THEME["primary"])
         .configure_legend(labelColor=DEFAULT_THEME["primary"], titleColor=DEFAULT_THEME["primary"])
@@ -3895,13 +3900,22 @@ def render_per_user_scores(
     ais = load_ai_predictions()
     human_names = sorted([participant["user_name"] for participant in humans], key=str.lower)
     ai_names = sorted([participant["user_name"] for participant in ais], key=str.lower)
+    default_humans = leaderboard_default_human_names(
+        humans,
+        results,
+        teams,
+        matches,
+        knockout_matchups,
+        third_place_combinations,
+        rank_limit=3,
+    )
     user_col, ai_col = st.columns([0.6, 0.4])
     with user_col:
         selected_humans = st.multiselect(
             "Users",
             human_names,
-            default=human_names[: min(3, len(human_names))],
-            key="per_user_users",
+            default=default_humans,
+            key="per_user_users_leaders",
         )
     with ai_col:
         selected_ais = st.multiselect("AI predictions", ai_names, key="per_user_ai")
@@ -4018,6 +4032,35 @@ def timeline_table(
     return pd.DataFrame(rows)
 
 
+def leaderboard_default_human_names(
+    humans: list[dict[str, Any]],
+    results: pd.DataFrame,
+    teams: pd.DataFrame,
+    matches: pd.DataFrame,
+    knockout_matchups: pd.DataFrame,
+    third_place_combinations: pd.DataFrame,
+    rank_limit: int,
+) -> list[str]:
+    human_names = sorted(
+        [participant["user_name"] for participant in humans],
+        key=str.lower,
+    )
+    completed_ids = completed_match_ids(results, matches)
+    if not completed_ids:
+        return human_names[: min(rank_limit, len(human_names))]
+
+    scoped_results = results_through_match(results, matches, completed_ids[-1])
+    snapshot = leaderboard_snapshot(
+        humans,
+        scoped_results,
+        teams,
+        matches,
+        knockout_matchups,
+        third_place_combinations,
+    )
+    return snapshot[snapshot["rank"] <= rank_limit]["user_name"].tolist()
+
+
 def render_timelines(
     users: pd.DataFrame,
     results: pd.DataFrame,
@@ -4030,9 +4073,23 @@ def render_timelines(
     ais = load_ai_predictions()
     human_names = sorted([participant["user_name"] for participant in humans], key=str.lower)
     ai_names = sorted([participant["user_name"] for participant in ais], key=str.lower)
+    default_humans = leaderboard_default_human_names(
+        humans,
+        results,
+        teams,
+        matches,
+        knockout_matchups,
+        third_place_combinations,
+        rank_limit=5,
+    )
     user_col, ai_col = st.columns([0.6, 0.4])
     with user_col:
-        selected_humans = st.multiselect("Users", human_names, default=human_names[: min(5, len(human_names))], key="timeline_users")
+        selected_humans = st.multiselect(
+            "Users",
+            human_names,
+            default=default_humans,
+            key="timeline_users_leaders",
+        )
     with ai_col:
         selected_ais = st.multiselect("AI predictions", ai_names, key="timeline_ai")
     timeline_color_domain = sorted(
@@ -4088,7 +4145,7 @@ def render_timelines(
             color_domain=timeline_color_domain,
         )
     if not full_rank_timeline.empty:
-        st.subheader("Top 5 Over Time")
+        st.subheader("Top 5 Rank Race")
         render_top_five_over_time_chart(full_rank_timeline, timeline_color_domain)
 
 
