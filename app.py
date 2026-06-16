@@ -3657,6 +3657,10 @@ def render_additional_rankings(
     )
 
     upset_rows = group_match_predictability(participants, results, teams, matches)
+    exclude_draws = st.checkbox("Exclude draws", key="additional_rankings_exclude_draws")
+    if exclude_draws and not upset_rows.empty:
+        upset_rows = upset_rows[upset_rows["Outcome"] != "Draw"]
+
     st.subheader("Top 10 Biggest Upsets")
     render_centered_dataframe(
         upset_rows.head(10),
