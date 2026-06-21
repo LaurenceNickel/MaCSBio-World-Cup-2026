@@ -3075,9 +3075,9 @@ def render_rules() -> None:
         | Category | Points | Added when |
         |---|---:|---|
         | **Per match** |  |  |
-        | &nbsp;&nbsp;&nbsp;Correct winner/draw per match | {MATCH_OUTCOME_POINTS} | Match result is entered |
-        | &nbsp;&nbsp;&nbsp;Correct home-team goals per match | {MATCH_HOME_GOALS_POINTS} | Match result is entered |
-        | &nbsp;&nbsp;&nbsp;Correct away-team goals per match | {MATCH_AWAY_GOALS_POINTS} | Match result is entered |
+        | &nbsp;&nbsp;&nbsp;Correct winner/draw per match | {MATCH_OUTCOME_POINTS} | Match is completed |
+        | &nbsp;&nbsp;&nbsp;Correct home-team goals per match | {MATCH_HOME_GOALS_POINTS} | Match is completed |
+        | &nbsp;&nbsp;&nbsp;Correct away-team goals per match | {MATCH_AWAY_GOALS_POINTS} | Match is completed |
         | **Final group standings** |  |  |
         | &nbsp;&nbsp;&nbsp;Correct final group placement per team | {GROUP_STANDING_POSITION_POINTS} | All matches in that group are complete |
         """
@@ -3093,8 +3093,8 @@ def render_rules() -> None:
         | &nbsp;&nbsp;&nbsp;Correct quarter-finalist, per team | {KNOCKOUT_STAGE_POINTS["quarter_final"]} | Team advances from the round of 16 |
         | &nbsp;&nbsp;&nbsp;Correct semi-finalist, per team | {KNOCKOUT_STAGE_POINTS["semi_final"]} | Team advances from the quarter-finals |
         | &nbsp;&nbsp;&nbsp;Correct finalist, per team | {KNOCKOUT_STAGE_POINTS["final"]} | Team advances from the semi-finals |
-        | &nbsp;&nbsp;&nbsp;Correct third-place winner | {THIRD_PLACE_WINNER_POINTS} | Third-place match result is entered |
-        | &nbsp;&nbsp;&nbsp;Correct World Cup winner | {CHAMPION_POINTS} | Final result is entered |
+        | &nbsp;&nbsp;&nbsp;Correct third-place winner | {THIRD_PLACE_WINNER_POINTS} | Third-place match is completed |
+        | &nbsp;&nbsp;&nbsp;Correct World Cup winner | {CHAMPION_POINTS} | Final is completed |
         """
     )
     st.markdown('<div class="rules-section-gap"></div>', unsafe_allow_html=True)
