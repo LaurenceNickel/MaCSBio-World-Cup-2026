@@ -3969,6 +3969,52 @@ def knockout_result_text(row: dict[str, Any] | pd.Series | None, teams: pd.DataF
     return text
 
 
+def render_knockout_progression_table(
+    rows: list[dict[str, str]],
+    detail_rows: dict[str, list[str]],
+    advancement_label: str,
+) -> None:
+    if not rows:
+        st.info("No predictions available.")
+        return
+
+    headers = ["User name", "Correct", "Points earned", advancement_label, "Predicted results"]
+    header_html = "".join(
+        f'<th class="{"left" if header in {"User name", advancement_label, "Predicted results"} else ""}">{html.escape(header)}</th>'
+        for header in headers
+    )
+    body_rows = []
+    for row in rows:
+        user_name = row["User name"]
+        details = detail_rows.get(user_name, [])
+        details_html = "<br>".join(html.escape(detail) for detail in details) or "-"
+        cells = [
+            f'<td class="left">{html.escape(user_name)}</td>',
+            f"<td>{html.escape(row['Correct'])}</td>",
+            f'<td class="bold">{html.escape(row["Points earned"])}</td>',
+            f'<td class="left">{html.escape(row[advancement_label])}</td>',
+            (
+                '<td class="left">'
+                "<details>"
+                "<summary>Show predicted results</summary>"
+                f'<div class="knockout-detail-results">{details_html}</div>'
+                "</details>"
+                "</td>"
+            ),
+        ]
+        body_rows.append(f"<tr>{''.join(cells)}</tr>")
+
+    st.markdown(
+        (
+            '<table class="leaderboard-table">'
+            f"<thead><tr>{header_html}</tr></thead>"
+            f"<tbody>{''.join(body_rows)}</tbody>"
+            "</table>"
+        ),
+        unsafe_allow_html=True,
+    )
+
+
 def render_knockout_progression_scores(
     participants: list[dict[str, Any]],
     results: pd.DataFrame,
@@ -4007,7 +4053,7 @@ def render_knockout_progression_scores(
     advancement_label = knockout_round_advancement_label(selected_stage)
 
     rows = []
-    detail_rows: dict[str, list[dict[str, str]]] = {}
+    detail_rows: dict[str, list[str]] = {}
     for participant in participants:
         prediction_state = derive_tournament_state(
             teams,
@@ -4027,41 +4073,24 @@ def render_knockout_progression_scores(
         correct_count = len(predicted_winner_set & actual_winners) if actual_winners else 0
         correct_display = f"{correct_count}/{len(actual_winners)}" if actual_winners else "-"
         points_display = str(correct_count * stage_points) if actual_winners else "-"
-        predicted_team_names = ", ".join(team_name(team_id, teams) for team_id in predicted_winners) or "-"
+        predicted_team_names = ", ".join(
+            sorted(team_name(team_id, teams) for team_id in predicted_winners)
+        ) or "-"
 
         rows.append(
             {
                 "User name": participant["user_name"],
                 "Correct": correct_display,
-                "Progression points earned": points_display,
+                "Points earned": points_display,
                 advancement_label: predicted_team_names,
             }
         )
         detail_rows[participant["user_name"]] = [
-            {
-                "Predicted result": knockout_result_text(
-                    predicted_resolved_rows.get(str(match_id)), teams
-                ),
-            }
+            knockout_result_text(predicted_resolved_rows.get(str(match_id)), teams)
             for match_id in round_matches["match_id"]
         ]
 
-    render_centered_dataframe(
-        pd.DataFrame(rows),
-        {"User name", advancement_label},
-        bold_columns={"Progression points earned"},
-    )
-
-    for row in rows:
-        summary = (
-            f"{row['User name']} · {row['Correct']} correct · "
-            f"{row['Progression points earned']} points"
-        )
-        with st.expander(summary):
-            render_centered_dataframe(
-                pd.DataFrame(detail_rows[row["User name"]]),
-                {"Predicted result"},
-            )
+    render_knockout_progression_table(rows, detail_rows, advancement_label)
 
 
 def render_per_match_scores(
