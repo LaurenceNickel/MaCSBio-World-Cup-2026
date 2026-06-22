@@ -742,6 +742,51 @@ def apply_visual_theme() -> None:
             border-bottom: 0;
         }
 
+        .knockout-progression-table {
+            table-layout: fixed;
+        }
+
+        .knockout-progression-table th:nth-child(1),
+        .knockout-progression-table td:nth-child(1) {
+            width: 13%;
+        }
+
+        .knockout-progression-table th:nth-child(2),
+        .knockout-progression-table td:nth-child(2) {
+            width: 9%;
+        }
+
+        .knockout-progression-table th:nth-child(3),
+        .knockout-progression-table td:nth-child(3) {
+            width: 12%;
+        }
+
+        .knockout-progression-table th:nth-child(4),
+        .knockout-progression-table td:nth-child(4) {
+            width: 36%;
+        }
+
+        .knockout-progression-table th:nth-child(5),
+        .knockout-progression-table td:nth-child(5) {
+            width: 30%;
+        }
+
+        .knockout-progression-table td,
+        .knockout-progression-table th {
+            overflow-wrap: anywhere;
+        }
+
+        .knockout-progression-table details summary {
+            cursor: pointer;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+
+        .knockout-detail-results {
+            margin-top: 0.55rem;
+            line-height: 1.55;
+        }
+
         .figure-pad {
             padding: 0.75rem 0.65rem 1.1rem;
             margin: 0.35rem 0 1.25rem;
@@ -3980,7 +4025,7 @@ def render_knockout_progression_table(
 
     headers = ["User name", "Correct", "Points earned", advancement_label, "Predicted results"]
     header_html = "".join(
-        f'<th class="{"left" if header in {"User name", advancement_label, "Predicted results"} else ""}">{html.escape(header)}</th>'
+        f'<th class="{" ".join(["left" if header in {"User name", advancement_label, "Predicted results"} else "", "bold" if header == "Points earned" else ""]).strip()}">{html.escape(header)}</th>'
         for header in headers
     )
     body_rows = []
@@ -4006,7 +4051,7 @@ def render_knockout_progression_table(
 
     st.markdown(
         (
-            '<table class="leaderboard-table">'
+            '<table class="leaderboard-table knockout-progression-table">'
             f"<thead><tr>{header_html}</tr></thead>"
             f"<tbody>{''.join(body_rows)}</tbody>"
             "</table>"
@@ -4196,7 +4241,7 @@ def render_per_match_scores(
     render_centered_dataframe(
         pd.DataFrame(rows),
         {"User name"},
-        bold_columns={"Actual score"},
+        bold_columns={"Points earned"},
     )
     if matchup_counts:
         st.subheader("Most Common Predicted Matchup")
