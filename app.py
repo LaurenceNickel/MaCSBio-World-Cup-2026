@@ -112,6 +112,22 @@ CARD_COLUMNS = [
     "away_indirect_red_cards",
     "away_direct_red_cards",
 ]
+QUALIFICATION_STATUS_MAX_REMAINING_MATCHES = 2
+QUALIFICATION_STATUS_SCORELINES = (
+    (0, 0),
+    (1, 1),
+    (99, 99),
+    (1, 0),
+    (2, 0),
+    (99, 0),
+    (2, 1),
+    (99, 1),
+    (0, 1),
+    (0, 2),
+    (0, 99),
+    (1, 2),
+    (1, 99),
+)
 
 
 DEFAULT_THEME = {
@@ -826,9 +842,11 @@ def apply_visual_theme() -> None:
         }
 
         .standings-legend {
-            display: flex;
+            display: grid;
+            grid-template-columns: auto 1fr;
             align-items: center;
-            gap: 0.45rem;
+            column-gap: 0.45rem;
+            row-gap: 0.2rem;
             margin-top: 0.45rem;
             color: #000000;
             font-size: 0.82rem;
@@ -840,6 +858,10 @@ def apply_visual_theme() -> None:
             border: 1px solid #9bcfa9;
             background: #dff4e5;
             border-radius: 3px;
+        }
+
+        .standings-legend-detail {
+            grid-column: 2;
         }
 
         .qualification-marker {
@@ -1565,9 +1587,9 @@ def display_advancing_legend() -> None:
         (
             '<div class="standings-legend">'
             '<span class="standings-legend-swatch"></span>'
-            '<span>Green row: currently advances to the next round. '
-            '<strong>(A)</strong>: sure to advance. '
-            '<strong>(E)</strong>: sure to be eliminated.</span>'
+            '<span>Green row: currently advances to the next round.</span>'
+            '<div class="standings-legend-detail"><strong>(A)</strong>: Advanced to Round of 32</div>'
+            '<div class="standings-legend-detail"><strong>(E)</strong>: Eliminated</div>'
             '</div>'
         ),
         unsafe_allow_html=True,
@@ -1764,79 +1786,89 @@ def sort_group_table(
     return pd.DataFrame([table_by_team[team_id] for team_id in ordered_team_ids])
 
 
+def calculate_single_group_standing(
+    group: str,
+    teams: pd.DataFrame,
+    matches: pd.DataFrame,
+    score_df: pd.DataFrame,
+    use_cards: bool,
+) -> pd.DataFrame:
+    score_rows = score_lookup(score_df)
+    rankings = {row["team_id"]: to_int(row["world_cup_ranking"], 9999) for _, row in teams.iterrows()}
+    group_teams = teams[teams["group"] == group]["team_id"].tolist()
+    rows = {
+        team_id: {
+            "team_id": team_id,
+            "games_played": 0,
+            "wins": 0,
+            "draws": 0,
+            "losses": 0,
+            "goals_for": 0,
+            "goals_against": 0,
+            "goal_difference": 0,
+            "fair_play_score": 0,
+            "points": 0,
+        }
+        for team_id in group_teams
+    }
+
+    group_matches = matches[
+        (matches["stage"] == GROUP_STAGE)
+        & (matches["home_team"].isin(group_teams))
+        & (matches["away_team"].isin(group_teams))
+    ]
+
+    for _, match in group_matches.iterrows():
+        score = completed_score(score_rows.get(match["match_id"]))
+        if score is None:
+            continue
+
+        home_id = match["home_team"]
+        away_id = match["away_team"]
+        home_goals, away_goals = score
+
+        rows[home_id]["games_played"] += 1
+        rows[away_id]["games_played"] += 1
+        rows[home_id]["goals_for"] += home_goals
+        rows[home_id]["goals_against"] += away_goals
+        rows[away_id]["goals_for"] += away_goals
+        rows[away_id]["goals_against"] += home_goals
+
+        if home_goals > away_goals:
+            rows[home_id]["wins"] += 1
+            rows[home_id]["points"] += 3
+            rows[away_id]["losses"] += 1
+        elif home_goals < away_goals:
+            rows[away_id]["wins"] += 1
+            rows[away_id]["points"] += 3
+            rows[home_id]["losses"] += 1
+        else:
+            rows[home_id]["draws"] += 1
+            rows[away_id]["draws"] += 1
+            rows[home_id]["points"] += 1
+            rows[away_id]["points"] += 1
+
+        if use_cards:
+            card_row = score_rows.get(match["match_id"], {})
+            rows[home_id]["fair_play_score"] += fair_play_delta(card_row, "home")
+            rows[away_id]["fair_play_score"] += fair_play_delta(card_row, "away")
+
+    table = pd.DataFrame(rows.values())
+    table["goal_difference"] = table["goals_for"] - table["goals_against"]
+    table = sort_group_table(table, group_matches, score_rows, rankings)
+    return table[STANDING_COLUMNS].reset_index(drop=True)
+
+
 def calculate_group_standings(
     teams: pd.DataFrame,
     matches: pd.DataFrame,
     score_df: pd.DataFrame,
     use_cards: bool,
 ) -> dict[str, pd.DataFrame]:
-    score_rows = score_lookup(score_df)
-    rankings = {row["team_id"]: to_int(row["world_cup_ranking"], 9999) for _, row in teams.iterrows()}
     standings: dict[str, pd.DataFrame] = {}
 
     for group in GROUPS:
-        group_teams = teams[teams["group"] == group]["team_id"].tolist()
-        rows = {
-            team_id: {
-                "team_id": team_id,
-                "games_played": 0,
-                "wins": 0,
-                "draws": 0,
-                "losses": 0,
-                "goals_for": 0,
-                "goals_against": 0,
-                "goal_difference": 0,
-                "fair_play_score": 0,
-                "points": 0,
-            }
-            for team_id in group_teams
-        }
-
-        group_matches = matches[
-            (matches["stage"] == GROUP_STAGE)
-            & (matches["home_team"].isin(group_teams))
-            & (matches["away_team"].isin(group_teams))
-        ]
-
-        for _, match in group_matches.iterrows():
-            score = completed_score(score_rows.get(match["match_id"]))
-            if score is None:
-                continue
-
-            home_id = match["home_team"]
-            away_id = match["away_team"]
-            home_goals, away_goals = score
-
-            rows[home_id]["games_played"] += 1
-            rows[away_id]["games_played"] += 1
-            rows[home_id]["goals_for"] += home_goals
-            rows[home_id]["goals_against"] += away_goals
-            rows[away_id]["goals_for"] += away_goals
-            rows[away_id]["goals_against"] += home_goals
-
-            if home_goals > away_goals:
-                rows[home_id]["wins"] += 1
-                rows[home_id]["points"] += 3
-                rows[away_id]["losses"] += 1
-            elif home_goals < away_goals:
-                rows[away_id]["wins"] += 1
-                rows[away_id]["points"] += 3
-                rows[home_id]["losses"] += 1
-            else:
-                rows[home_id]["draws"] += 1
-                rows[away_id]["draws"] += 1
-                rows[home_id]["points"] += 1
-                rows[away_id]["points"] += 1
-
-            if use_cards:
-                card_row = score_rows.get(match["match_id"], {})
-                rows[home_id]["fair_play_score"] += fair_play_delta(card_row, "home")
-                rows[away_id]["fair_play_score"] += fair_play_delta(card_row, "away")
-
-        table = pd.DataFrame(rows.values())
-        table["goal_difference"] = table["goals_for"] - table["goals_against"]
-        table = sort_group_table(table, group_matches, score_rows, rankings)
-        standings[group] = table[STANDING_COLUMNS].reset_index(drop=True)
+        standings[group] = calculate_single_group_standing(group, teams, matches, score_df, use_cards)
 
     return standings
 
@@ -1929,50 +1961,18 @@ def confirmed_group_position_slots(
     teams: pd.DataFrame,
 ) -> set[str]:
     confirmed_slots: set[str] = set()
-    team_groups = dict(zip(teams["team_id"], teams["group"]))
-    result_rows = score_lookup(score_df)
 
     for group, table in group_standings.items():
         if group_is_complete(group, matches, score_df, teams):
             confirmed_slots.update(f"{position + 1}{group}" for position in range(len(table)))
             continue
 
-        group_team_ids = [str(team_id) for team_id in table["team_id"]]
-        group_matches = matches[
-            (matches["stage"] == GROUP_STAGE)
-            & (matches["home_team"].map(team_groups) == group)
-            & (matches["away_team"].map(team_groups) == group)
-        ]
-        points_by_team = {
-            str(row["team_id"]): to_int(row["points"])
-            for _, row in table.iterrows()
-        }
-        remaining_matches_by_team = {team_id: 0 for team_id in group_team_ids}
-        for _, match in group_matches.iterrows():
-            if completed_score(result_rows.get(str(match["match_id"]))) is not None:
-                continue
-            remaining_matches_by_team[str(match["home_team"])] += 1
-            remaining_matches_by_team[str(match["away_team"])] += 1
-
-        max_points = {
-            team_id: points_by_team.get(team_id, 0) + 3 * remaining_matches_by_team.get(team_id, 0)
-            for team_id in group_team_ids
-        }
+        possible_positions = possible_group_positions(group, matches, score_df, teams, use_cards=True)
+        if not possible_positions:
+            continue
         for position, row in enumerate(table.itertuples(index=False)):
             team_id = str(getattr(row, "team_id"))
-            current_points = points_by_team.get(team_id, 0)
-            maximum_points = max_points.get(team_id, current_points)
-            definitely_ahead = sum(
-                1
-                for other_id in group_team_ids
-                if other_id != team_id and points_by_team.get(other_id, 0) > maximum_points
-            )
-            can_catch_or_pass = sum(
-                1
-                for other_id in group_team_ids
-                if other_id != team_id and max_points.get(other_id, 0) >= current_points
-            )
-            if definitely_ahead == position and can_catch_or_pass == position:
+            if possible_positions.get(team_id) == {position + 1}:
                 confirmed_slots.add(f"{position + 1}{group}")
 
     return confirmed_slots
@@ -2188,6 +2188,66 @@ def group_is_complete(group: str, matches: pd.DataFrame, results: pd.DataFrame, 
     return not group_matches.empty and all(
         completed_score(result_rows.get(match_id)) is not None for match_id in group_matches["match_id"]
     )
+
+
+def group_match_rows(group: str, matches: pd.DataFrame, teams: pd.DataFrame) -> pd.DataFrame:
+    team_groups = dict(zip(teams["team_id"], teams["group"]))
+    return matches[
+        (matches["stage"] == GROUP_STAGE)
+        & (matches["home_team"].map(team_groups) == group)
+        & (matches["away_team"].map(team_groups) == group)
+    ]
+
+
+def remaining_group_matches(group: str, matches: pd.DataFrame, results: pd.DataFrame, teams: pd.DataFrame) -> pd.DataFrame:
+    result_rows = score_lookup(results)
+    group_matches = group_match_rows(group, matches, teams)
+    return group_matches[
+        group_matches["match_id"].map(lambda match_id: completed_score(result_rows.get(str(match_id))) is None)
+    ]
+
+
+def simulated_group_result_rows(
+    base_results: pd.DataFrame,
+    remaining_matches: pd.DataFrame,
+    scoreline_options: tuple[tuple[int, int], ...],
+) -> list[pd.DataFrame]:
+    if remaining_matches.empty:
+        return [base_results.copy()]
+
+    first_match = remaining_matches.iloc[0]
+    rest = remaining_matches.iloc[1:]
+    simulations = []
+    for home_goals, away_goals in scoreline_options:
+        simulated_row = {
+            "match_id": first_match["match_id"],
+            "home_goals": home_goals,
+            "away_goals": away_goals,
+            PENALTY_WINNER_COLUMN: "",
+            **{column: "" for column in CARD_COLUMNS},
+        }
+        next_results = pd.concat([base_results, pd.DataFrame([simulated_row])], ignore_index=True)
+        simulations.extend(simulated_group_result_rows(next_results, rest, scoreline_options))
+    return simulations
+
+
+def possible_group_positions(
+    group: str,
+    matches: pd.DataFrame,
+    results: pd.DataFrame,
+    teams: pd.DataFrame,
+    use_cards: bool,
+) -> dict[str, set[int]]:
+    remaining = remaining_group_matches(group, matches, results, teams)
+    if len(remaining) > QUALIFICATION_STATUS_MAX_REMAINING_MATCHES:
+        return {}
+
+    positions: dict[str, set[int]] = {}
+    for simulated_results in simulated_group_result_rows(results, remaining, QUALIFICATION_STATUS_SCORELINES):
+        table = calculate_single_group_standing(group, teams, matches, simulated_results, use_cards)
+        for position, team_id in enumerate(table["team_id"], start=1):
+            positions.setdefault(str(team_id), set()).add(position)
+    return positions
 
 
 def match_score_points_for_match(
@@ -2666,16 +2726,10 @@ def group_qualification_statuses(
 ) -> dict[str, str]:
     statuses: dict[str, str] = {}
     advancing_team_ids = advancing_team_ids_from_standings(group_standings, third_place)
-    result_rows = score_lookup(results)
     all_groups_complete = all(group_is_complete(group, matches, results, teams) for group in GROUPS)
 
     for group, table in group_standings.items():
         group_team_ids = [str(team_id) for team_id in table["team_id"]]
-        group_matches = matches[
-            (matches["stage"] == GROUP_STAGE)
-            & (matches["home_team"].astype(str).isin(group_team_ids))
-            & (matches["away_team"].astype(str).isin(group_team_ids))
-        ]
         group_complete = group_is_complete(group, matches, results, teams)
         if group_complete:
             for position, team_id in enumerate(group_team_ids):
@@ -2687,38 +2741,14 @@ def group_qualification_statuses(
                     statuses[team_id] = "eliminated"
             continue
 
-        points_by_team = {
-            str(row["team_id"]): to_int(row["points"])
-            for _, row in table.iterrows()
-        }
-        remaining_matches_by_team = {team_id: 0 for team_id in group_team_ids}
-        for _, match in group_matches.iterrows():
-            if completed_score(result_rows.get(str(match["match_id"]))) is not None:
-                continue
-            remaining_matches_by_team[str(match["home_team"])] += 1
-            remaining_matches_by_team[str(match["away_team"])] += 1
-
-        max_points = {
-            team_id: points_by_team.get(team_id, 0) + 3 * remaining_matches_by_team.get(team_id, 0)
-            for team_id in group_team_ids
-        }
+        possible_positions = possible_group_positions(group, matches, results, teams, use_cards=True)
+        if not possible_positions:
+            continue
         for team_id in group_team_ids:
-            current_points = points_by_team.get(team_id, 0)
-            competitors_that_can_catch = sum(
-                1
-                for other_id in group_team_ids
-                if other_id != team_id and max_points.get(other_id, 0) >= current_points
-            )
-            if competitors_that_can_catch <= 1:
+            team_positions = possible_positions.get(team_id, set())
+            if team_positions and max(team_positions) <= 2:
                 statuses[team_id] = "advanced"
-                continue
-
-            teams_already_out_of_reach = sum(
-                1
-                for other_id in group_team_ids
-                if other_id != team_id and points_by_team.get(other_id, 0) > max_points.get(team_id, 0)
-            )
-            if teams_already_out_of_reach >= 3:
+            elif team_positions and min(team_positions) >= 4:
                 statuses[team_id] = "eliminated"
 
     return statuses
