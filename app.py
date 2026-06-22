@@ -787,6 +787,30 @@ def apply_visual_theme() -> None:
             line-height: 1.55;
         }
 
+        .team-progress-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.28rem 0.38rem;
+        }
+
+        .team-progress-chip {
+            display: inline-block;
+            line-height: 1.25;
+            font-weight: 600;
+        }
+
+        .team-progress-chip.advanced {
+            color: #167a3a;
+        }
+
+        .team-progress-chip.eliminated {
+            color: #b42318;
+        }
+
+        .team-progress-chip.pending {
+            color: #000000;
+        }
+
         .figure-pad {
             padding: 0.75rem 0.65rem 1.1rem;
             margin: 0.35rem 0 1.25rem;
@@ -3967,6 +3991,28 @@ def knockout_round_options() -> list[tuple[str, str]]:
     ]
 
 
+def stage_results_complete(stage: str, results: pd.DataFrame, matches: pd.DataFrame) -> bool:
+    stage_matches = matches[matches["stage"].eq(stage)]
+    if stage_matches.empty:
+        return False
+    result_rows = score_lookup(results)
+    return all(
+        completed_score(result_rows.get(str(match_id))) is not None
+        for match_id in stage_matches["match_id"]
+    )
+
+
+def current_knockout_round_index(
+    options: list[tuple[str, str]], results: pd.DataFrame, matches: pd.DataFrame
+) -> int:
+    if not stage_results_complete(GROUP_STAGE, results, matches):
+        return 0
+    for index, (stage, _) in enumerate(options):
+        if not stage_results_complete(stage, results, matches):
+            return index
+    return max(0, len(options) - 1)
+
+
 def knockout_round_points(stage: str) -> int:
     if stage == "round_of_32":
         return KNOCKOUT_STAGE_POINTS["round_of_16"]
@@ -4014,6 +4060,41 @@ def knockout_result_text(row: dict[str, Any] | pd.Series | None, teams: pd.DataF
     return text
 
 
+def knockout_team_progress_status(team_id: str, actual_round_rows: pd.DataFrame) -> str:
+    if actual_round_rows.empty:
+        return "pending"
+    all_slots_known = True
+    for _, row in actual_round_rows.iterrows():
+        home_id = str(row.get("home_team", "")).strip()
+        away_id = str(row.get("away_team", "")).strip()
+        if not home_id or not away_id:
+            all_slots_known = False
+            continue
+        winner_id = str(row.get("winner", "")).strip()
+        if team_id in {home_id, away_id}:
+            if not winner_id:
+                return "pending"
+            return "advanced" if winner_id == team_id else "eliminated"
+    return "eliminated" if all_slots_known else "pending"
+
+
+def predicted_team_progress_html(
+    team_ids: list[str],
+    teams: pd.DataFrame,
+    actual_round_rows: pd.DataFrame,
+) -> str:
+    if not team_ids:
+        return "-"
+    labels = sorted((team_name(team_id, teams), team_id) for team_id in team_ids)
+    chips = []
+    for label, team_id in labels:
+        status = knockout_team_progress_status(team_id, actual_round_rows)
+        chips.append(
+            f'<span class="team-progress-chip {status}">{html.escape(label)}</span>'
+        )
+    return f'<div class="team-progress-list">{"".join(chips)}</div>'
+
+
 def render_knockout_progression_table(
     rows: list[dict[str, str]],
     detail_rows: dict[str, list[str]],
@@ -4037,7 +4118,7 @@ def render_knockout_progression_table(
             f'<td class="left">{html.escape(user_name)}</td>',
             f"<td>{html.escape(row['Correct'])}</td>",
             f'<td class="bold">{html.escape(row["Points earned"])}</td>',
-            f'<td class="left">{html.escape(row[advancement_label])}</td>',
+            f'<td class="left">{row.get("_advancement_html", html.escape(row[advancement_label]))}</td>',
             (
                 '<td class="left">'
                 "<details>"
@@ -4070,9 +4151,11 @@ def render_knockout_progression_scores(
 ) -> None:
     options = knockout_round_options()
     labels = [label for _, label in options]
+    default_round_index = current_knockout_round_index(options, results, matches)
     selected_label = st.selectbox(
         "Knockout round",
         labels,
+        index=default_round_index,
         key="per_match_knockout_stage",
     )
     selected_stage = dict((label, stage) for stage, label in options)[selected_label]
@@ -4094,6 +4177,9 @@ def render_knockout_progression_scores(
         for match_id, winner in actual_state["winners"].items()
         if match_id in set(round_matches["match_id"]) and winner
     }
+    actual_round_rows = actual_state["resolved_matches"][
+        actual_state["resolved_matches"]["stage"].eq(selected_stage)
+    ]
     stage_points = knockout_round_points(selected_stage)
     advancement_label = knockout_round_advancement_label(selected_stage)
 
@@ -4131,6 +4217,9 @@ def render_knockout_progression_scores(
                 "Correct": correct_display,
                 "Points earned": points_display,
                 advancement_label: predicted_team_names,
+                "_advancement_html": predicted_team_progress_html(
+                    predicted_winners, teams, actual_round_rows
+                ),
             }
         )
         detail_rows[participant["user_name"]] = [
@@ -4141,14 +4230,16 @@ def render_knockout_progression_scores(
             )
         ]
 
+    render_knockout_progression_table(rows, detail_rows, advancement_label)
+
     if participants and predicted_counts:
         summary_rows = [
             {
                 "Team": team_name(team_id, teams),
-                "Predictions": count,
-                "Percentage": f"{round(100 * count / len(participants), 1)}%",
+                "Predictions": predicted_counts.get(str(team_id), 0),
+                "Percentage": f"{round(100 * predicted_counts.get(str(team_id), 0) / len(participants), 1)}%",
             }
-            for team_id, count in predicted_counts.items()
+            for team_id in teams["team_id"]
         ]
         summary_table = pd.DataFrame(summary_rows).sort_values(
             ["Predictions", "Team"], ascending=[False, True]
@@ -4159,8 +4250,6 @@ def render_knockout_progression_scores(
             {"Team"},
             bold_columns={"Percentage"},
         )
-
-    render_knockout_progression_table(rows, detail_rows, advancement_label)
 
 
 def render_per_match_scores(
