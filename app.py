@@ -4410,6 +4410,26 @@ def knockout_result_text(row: dict[str, Any] | pd.Series | None, teams: pd.DataF
     return text
 
 
+def knockout_winner_first_result_text(row: dict[str, Any] | pd.Series | None, teams: pd.DataFrame) -> str:
+    if row is None:
+        return "-"
+    home_id = str(row.get("home_team", "")).strip()
+    away_id = str(row.get("away_team", "")).strip()
+    if not home_id or not away_id:
+        return "-"
+    score = completed_score(row)
+    winner_id = str(row.get("winner", "")).strip()
+    if not winner_id or score is None:
+        return knockout_result_text(row, teams)
+
+    loser_id = away_id if winner_id == home_id else home_id
+    winner_goals, loser_goals = score if winner_id == home_id else (score[1], score[0])
+    text = f"{team_name(winner_id, teams)} {winner_goals}-{loser_goals} {team_name(loser_id, teams)}"
+    if score[0] == score[1]:
+        text = f"{text}, {team_name(winner_id, teams)} on penalties"
+    return text
+
+
 def knockout_team_progress_status(
     team_id: str,
     actual_round_rows: pd.DataFrame,
@@ -4599,7 +4619,7 @@ def render_knockout_progression_scores(
         detail_rows[participant["user_name"]] = [
             result
             for result in sorted(
-                knockout_result_text(predicted_resolved_rows.get(str(match_id)), teams)
+                knockout_winner_first_result_text(predicted_resolved_rows.get(str(match_id)), teams)
                 for match_id in round_matches["match_id"]
             )
         ]
