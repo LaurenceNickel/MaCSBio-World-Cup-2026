@@ -4013,6 +4013,18 @@ def current_knockout_round_index(
     return max(0, len(options) - 1)
 
 
+def knockout_round_entrants_locked(stage: str, results: pd.DataFrame, matches: pd.DataFrame) -> bool:
+    previous_stage = {
+        "round_of_32": GROUP_STAGE,
+        "round_of_16": "round_of_32",
+        "quarter_final": "round_of_16",
+        "semi_final": "quarter_final",
+        "third_place": "semi_final",
+        "final": "semi_final",
+    }.get(stage)
+    return bool(previous_stage) and stage_results_complete(previous_stage, results, matches)
+
+
 def knockout_round_points(stage: str) -> int:
     if stage == "round_of_32":
         return KNOCKOUT_STAGE_POINTS["round_of_16"]
@@ -4060,35 +4072,36 @@ def knockout_result_text(row: dict[str, Any] | pd.Series | None, teams: pd.DataF
     return text
 
 
-def knockout_team_progress_status(team_id: str, actual_round_rows: pd.DataFrame) -> str:
+def knockout_team_progress_status(
+    team_id: str, actual_round_rows: pd.DataFrame, entrants_locked: bool
+) -> str:
     if actual_round_rows.empty:
         return "pending"
-    all_slots_known = True
     for _, row in actual_round_rows.iterrows():
         home_id = str(row.get("home_team", "")).strip()
         away_id = str(row.get("away_team", "")).strip()
         if not home_id or not away_id:
-            all_slots_known = False
             continue
         winner_id = str(row.get("winner", "")).strip()
         if team_id in {home_id, away_id}:
             if not winner_id:
                 return "pending"
             return "advanced" if winner_id == team_id else "eliminated"
-    return "eliminated" if all_slots_known else "pending"
+    return "eliminated" if entrants_locked else "pending"
 
 
 def predicted_team_progress_html(
     team_ids: list[str],
     teams: pd.DataFrame,
     actual_round_rows: pd.DataFrame,
+    entrants_locked: bool,
 ) -> str:
     if not team_ids:
         return "-"
     labels = sorted((team_name(team_id, teams), team_id) for team_id in team_ids)
     chips = []
     for label, team_id in labels:
-        status = knockout_team_progress_status(team_id, actual_round_rows)
+        status = knockout_team_progress_status(team_id, actual_round_rows, entrants_locked)
         chips.append(
             f'<span class="team-progress-chip {status}">{html.escape(label)}</span>'
         )
@@ -4180,6 +4193,7 @@ def render_knockout_progression_scores(
     actual_round_rows = actual_state["resolved_matches"][
         actual_state["resolved_matches"]["stage"].eq(selected_stage)
     ]
+    entrants_locked = knockout_round_entrants_locked(selected_stage, results, matches)
     stage_points = knockout_round_points(selected_stage)
     advancement_label = knockout_round_advancement_label(selected_stage)
 
@@ -4218,7 +4232,7 @@ def render_knockout_progression_scores(
                 "Points earned": points_display,
                 advancement_label: predicted_team_names,
                 "_advancement_html": predicted_team_progress_html(
-                    predicted_winners, teams, actual_round_rows
+                    predicted_winners, teams, actual_round_rows, entrants_locked
                 ),
             }
         )
@@ -4244,7 +4258,7 @@ def render_knockout_progression_scores(
         summary_table = pd.DataFrame(summary_rows).sort_values(
             ["Predictions", "Team"], ascending=[False, True]
         )
-        st.subheader("Most Predicted Teams to Advance")
+        st.subheader("Most Predicted Teams to Advance/Win")
         render_centered_dataframe(
             summary_table,
             {"Team"},
