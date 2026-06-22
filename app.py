@@ -112,6 +112,7 @@ CARD_COLUMNS = [
     "away_indirect_red_cards",
     "away_direct_red_cards",
 ]
+CACHE_SCHEMA_VERSION = "confirmed-placement-v3"
 QUALIFICATION_STATUS_MAX_REMAINING_MATCHES = 2
 QUALIFICATION_STATUS_SCORELINES = (
     (0, 0),
@@ -914,6 +915,15 @@ def apply_visual_theme() -> None:
     for placeholder, value in replacements.items():
         css = css.replace(placeholder, value)
     st.markdown(css, unsafe_allow_html=True)
+
+
+def clear_stale_streamlit_cache() -> None:
+    if st.session_state.get("cache_schema_version") == CACHE_SCHEMA_VERSION:
+        return
+    clear_cache = getattr(st.cache_data, "clear", None)
+    if callable(clear_cache):
+        clear_cache()
+    st.session_state["cache_schema_version"] = CACHE_SCHEMA_VERSION
 
 
 def ensure_data_files() -> None:
@@ -1959,6 +1969,7 @@ def confirmed_group_position_slots(
     matches: pd.DataFrame,
     score_df: pd.DataFrame,
     teams: pd.DataFrame,
+    possible_positions_by_group: dict[str, dict[str, set[int]]] | None = None,
 ) -> set[str]:
     confirmed_slots: set[str] = set()
 
@@ -1967,7 +1978,10 @@ def confirmed_group_position_slots(
             confirmed_slots.update(f"{position + 1}{group}" for position in range(len(table)))
             continue
 
-        possible_positions = possible_group_positions(group, matches, score_df, teams, use_cards=True)
+        possible_positions = (
+            (possible_positions_by_group or {}).get(group)
+            or possible_group_positions(group, matches, score_df, teams, use_cards=True)
+        )
         if not possible_positions:
             continue
         for position, row in enumerate(table.itertuples(index=False)):
@@ -1994,13 +2008,26 @@ def derive_tournament_state(
     third_place_combinations: pd.DataFrame,
     use_cards: bool,
     require_confirmed_placements: bool = False,
+    cache_schema_version: str = CACHE_SCHEMA_VERSION,
 ) -> dict[str, Any]:
     group_standings = calculate_group_standings(teams, matches, score_df, use_cards)
     third_place = calculate_third_place_standings(group_standings, teams)
     confirmed_position_slots = None
+    possible_positions_by_group: dict[str, dict[str, set[int]]] = {}
     third_place_for_combination = third_place
     if require_confirmed_placements:
-        confirmed_position_slots = confirmed_group_position_slots(group_standings, matches, score_df, teams)
+        possible_positions_by_group = {
+            group: possible_group_positions(group, matches, score_df, teams, use_cards=True)
+            for group in GROUPS
+            if not group_is_complete(group, matches, score_df, teams)
+        }
+        confirmed_position_slots = confirmed_group_position_slots(
+            group_standings,
+            matches,
+            score_df,
+            teams,
+            possible_positions_by_group,
+        )
         if all(group_is_complete(group, matches, score_df, teams) for group in GROUPS):
             third_place_for_combination = third_place
         else:
@@ -2081,6 +2108,8 @@ def derive_tournament_state(
         "resolved_matches": resolved_matches,
         "winners": winners,
         "losers": losers,
+        "confirmed_position_slots": confirmed_position_slots or set(),
+        "possible_positions_by_group": possible_positions_by_group,
     }
 
 
@@ -2231,12 +2260,14 @@ def simulated_group_result_rows(
     return simulations
 
 
+@st.cache_data(show_spinner=False, hash_funcs={pd.DataFrame: dataframe_cache_key})
 def possible_group_positions(
     group: str,
     matches: pd.DataFrame,
     results: pd.DataFrame,
     teams: pd.DataFrame,
     use_cards: bool,
+    cache_schema_version: str = CACHE_SCHEMA_VERSION,
 ) -> dict[str, set[int]]:
     remaining = remaining_group_matches(group, matches, results, teams)
     if len(remaining) > QUALIFICATION_STATUS_MAX_REMAINING_MATCHES:
@@ -2723,6 +2754,7 @@ def group_qualification_statuses(
     matches: pd.DataFrame,
     results: pd.DataFrame,
     teams: pd.DataFrame,
+    possible_positions_by_group: dict[str, dict[str, set[int]]] | None = None,
 ) -> dict[str, str]:
     statuses: dict[str, str] = {}
     advancing_team_ids = advancing_team_ids_from_standings(group_standings, third_place)
@@ -2741,7 +2773,10 @@ def group_qualification_statuses(
                     statuses[team_id] = "eliminated"
             continue
 
-        possible_positions = possible_group_positions(group, matches, results, teams, use_cards=True)
+        possible_positions = (
+            (possible_positions_by_group or {}).get(group)
+            or possible_group_positions(group, matches, results, teams, use_cards=True)
+        )
         if not possible_positions:
             continue
         for team_id in group_team_ids:
@@ -3101,6 +3136,7 @@ def render_readonly_results_inputs(
     teams: pd.DataFrame,
     group_standings: dict[str, pd.DataFrame],
     third_place: pd.DataFrame,
+    possible_positions_by_group: dict[str, dict[str, set[int]]] | None = None,
 ) -> None:
     group_by_team = dict(zip(teams["team_id"], teams["group"]))
     advancing_team_ids = advancing_team_ids_from_standings(group_standings, third_place)
@@ -3117,7 +3153,12 @@ def render_readonly_results_inputs(
         )
     scoped_results = pd.DataFrame(result_rows)
     qualification_statuses = group_qualification_statuses(
-        group_standings, third_place, matches, scoped_results, teams
+        group_standings,
+        third_place,
+        matches,
+        scoped_results,
+        teams,
+        possible_positions_by_group,
     )
 
     for group in GROUPS:
@@ -3400,7 +3441,14 @@ def render_results(
     write_actual_standings(state)
     st.subheader("Group Stage")
     resolved = state["resolved_matches"].set_index("match_id")
-    render_readonly_results_inputs(matches, resolved, teams, state["group_standings"], state["third_place"])
+    render_readonly_results_inputs(
+        matches,
+        resolved,
+        teams,
+        state["group_standings"],
+        state["third_place"],
+        state["possible_positions_by_group"],
+    )
 
 
 def render_rules() -> None:
@@ -5154,6 +5202,7 @@ def render_leaderboard(
 
 def main() -> None:
     st.set_page_config(page_title="MaCSBio World Cup 2026", layout="wide")
+    clear_stale_streamlit_cache()
     apply_visual_theme()
     ensure_data_files()
 
