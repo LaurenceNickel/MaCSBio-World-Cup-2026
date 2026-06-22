@@ -734,18 +734,6 @@ def apply_visual_theme() -> None:
             background: #e9f5ff;
         }
 
-        .leaderboard-table td.team-status-advanced {
-            background: #dff4e5;
-            color: #14532d;
-            font-weight: 700;
-        }
-
-        .leaderboard-table td.team-status-eliminated {
-            background: #fee2e2;
-            color: #991b1b;
-            font-weight: 700;
-        }
-
         .leaderboard-table th:last-child,
         .leaderboard-table td:last-child {
             border-right: 0;
@@ -3853,7 +3841,6 @@ def render_centered_dataframe(
     left_columns: set[str] | None = None,
     bold_columns: set[str] | None = None,
     row_classes: list[str] | None = None,
-    cell_classes: dict[tuple[int, str], str] | None = None,
 ) -> None:
     if table.empty:
         st.markdown(
@@ -3884,9 +3871,6 @@ def render_centered_dataframe(
                 classes.append("left")
             if str(column).lower() in bold_lookup:
                 classes.append("bold")
-            cell_class_name = (cell_classes or {}).get((index, str(column)), "")
-            if cell_class_name:
-                classes.append(cell_class_name)
             cell_class = f' class="{" ".join(classes)}"' if classes else ""
             cells.append(f"<td{cell_class}>{table_display_value(row[column])}</td>")
         body_rows.append(f"<tr{class_attr}>{''.join(cells)}</tr>")
@@ -3955,32 +3939,6 @@ def predicted_winner_bucket(
             return "Away"
         return "No winner"
     return prediction_winner_label(match, prediction, resolved_row, teams)
-
-
-def predicted_winner_team_id(
-    match: pd.Series,
-    prediction: dict[str, Any] | pd.Series | None,
-    resolved_row: dict[str, Any] | pd.Series | None,
-) -> str:
-    score = completed_score(prediction)
-    if score is None:
-        return ""
-    home_goals, away_goals = score
-    if str(match["stage"]) in KNOCKOUT_STAGES:
-        winner = str(resolved_row.get("winner", "")).strip() if resolved_row is not None else ""
-        return winner
-    if home_goals == away_goals:
-        return ""
-    return str(match["home_team"] if home_goals > away_goals else match["away_team"])
-
-
-def team_status_cell_class(team_id: str, qualification_statuses: dict[str, str]) -> str:
-    status = qualification_statuses.get(str(team_id), "")
-    if status == "advanced":
-        return "team-status-advanced"
-    if status == "eliminated":
-        return "team-status-eliminated"
-    return ""
 
 
 def matchup_text_from_resolved(row: dict[str, Any] | pd.Series | None, teams: pd.DataFrame) -> str:
@@ -4453,10 +4411,11 @@ def knockout_result_text(row: dict[str, Any] | pd.Series | None, teams: pd.DataF
 
 
 def knockout_team_progress_status(
-    team_id: str, actual_round_rows: pd.DataFrame, entrants_locked: bool
+    team_id: str,
+    actual_round_rows: pd.DataFrame,
+    entrants_locked: bool,
+    qualification_statuses: dict[str, str] | None = None,
 ) -> str:
-    if actual_round_rows.empty:
-        return "pending"
     for _, row in actual_round_rows.iterrows():
         home_id = str(row.get("home_team", "")).strip()
         away_id = str(row.get("away_team", "")).strip()
@@ -4467,6 +4426,11 @@ def knockout_team_progress_status(
             if not winner_id:
                 return "pending"
             return "advanced" if winner_id == team_id else "eliminated"
+    group_status = (qualification_statuses or {}).get(str(team_id), "")
+    if group_status == "advanced":
+        return "advanced"
+    if group_status == "eliminated":
+        return "eliminated"
     return "eliminated" if entrants_locked else "pending"
 
 
@@ -4475,13 +4439,19 @@ def predicted_team_progress_html(
     teams: pd.DataFrame,
     actual_round_rows: pd.DataFrame,
     entrants_locked: bool,
+    qualification_statuses: dict[str, str] | None = None,
 ) -> str:
     if not team_ids:
         return "-"
     labels = sorted((team_name(team_id, teams), team_id) for team_id in team_ids)
     chips = []
     for label, team_id in labels:
-        status = knockout_team_progress_status(team_id, actual_round_rows, entrants_locked)
+        status = knockout_team_progress_status(
+            team_id,
+            actual_round_rows,
+            entrants_locked,
+            qualification_statuses,
+        )
         chips.append(
             f'<span class="team-progress-chip {status}">{html.escape(label)}</span>'
         )
@@ -4574,6 +4544,13 @@ def render_knockout_progression_scores(
     actual_round_rows = actual_state["resolved_matches"][
         actual_state["resolved_matches"]["stage"].eq(selected_stage)
     ]
+    qualification_statuses = group_qualification_statuses(
+        actual_state["group_standings"],
+        actual_state["third_place"],
+        matches,
+        results,
+        teams,
+    )
     entrants_locked = knockout_round_entrants_locked(selected_stage, results, matches)
     stage_points = knockout_round_points(selected_stage)
     advancement_label = knockout_round_advancement_label(selected_stage)
@@ -4613,7 +4590,11 @@ def render_knockout_progression_scores(
                 "Points earned": points_display,
                 advancement_label: predicted_team_names,
                 "_advancement_html": predicted_team_progress_html(
-                    predicted_winners, teams, actual_round_rows, entrants_locked
+                    predicted_winners,
+                    teams,
+                    actual_round_rows,
+                    entrants_locked,
+                    qualification_statuses,
                 ),
             }
         )
@@ -4700,24 +4681,6 @@ def render_per_match_scores(
     actual_rows = score_lookup(scoped_results)
     is_knockout_match = str(match["stage"]) in KNOCKOUT_STAGES
     actual_resolved_rows = {}
-    qualification_statuses: dict[str, str] = {}
-    if not is_knockout_match:
-        actual_state = derive_tournament_state(
-            teams,
-            matches,
-            scoped_results,
-            knockout_matchups,
-            third_place_combinations,
-            use_cards=True,
-            require_confirmed_placements=True,
-        )
-        qualification_statuses = group_qualification_statuses(
-            actual_state["group_standings"],
-            actual_state["third_place"],
-            matches,
-            scoped_results,
-            teams,
-        )
     if is_knockout_match:
         actual_state = derive_tournament_state(
             teams,
@@ -4733,7 +4696,6 @@ def render_per_match_scores(
     winner_counts: dict[str, int] = {}
     matchup_counts: dict[str, int] = {}
     score_counts: dict[str, int] = {}
-    cell_classes: dict[tuple[int, str], str] = {}
     for participant in participants:
         prediction_rows = score_lookup(participant["predictions"])
         prediction_resolved_rows = {}
@@ -4753,7 +4715,6 @@ def render_per_match_scores(
         prediction = prediction_rows.get(selected_match_id)
         resolved_row = prediction_resolved_rows.get(selected_match_id)
         winner = predicted_winner_bucket(match, prediction, resolved_row, teams)
-        winner_team_id = predicted_winner_team_id(match, prediction, resolved_row)
         score_text = prediction_score_text(prediction)
         winner_counts[winner] = winner_counts.get(winner, 0) + 1
         score_counts[score_text] = score_counts.get(score_text, 0) + 1
@@ -4764,19 +4725,14 @@ def render_per_match_scores(
             {
                 "User name": participant["user_name"],
                 "Prediction": score_text,
-                "Predicted result": winner,
                 "Actual score": prediction_score_text(actual_rows.get(selected_match_id)),
                 "Points earned": points["total_points"],
             }
         )
-        status_class = team_status_cell_class(winner_team_id, qualification_statuses)
-        if status_class:
-            cell_classes[(len(rows) - 1, "Predicted result")] = status_class
     render_centered_dataframe(
         pd.DataFrame(rows),
-        {"User name", "Predicted result"},
+        {"User name"},
         bold_columns={"Points earned"},
-        cell_classes=cell_classes,
     )
     if matchup_counts:
         st.subheader("Most Common Predicted Matchup")
