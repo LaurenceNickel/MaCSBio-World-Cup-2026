@@ -3882,12 +3882,16 @@ def per_match_score_options(
     results: pd.DataFrame,
     matches: pd.DataFrame,
     teams: pd.DataFrame,
+    stage_filter: list[str] | None = None,
 ) -> tuple[list[tuple[str, str]], int]:
     result_rows = score_lookup(results)
     options = []
     first_uncompleted_index = None
+    filtered_matches = matches
+    if stage_filter is not None:
+        filtered_matches = matches[matches["stage"].isin(stage_filter)]
 
-    for _, match in matches.iterrows():
+    for _, match in filtered_matches.iterrows():
         match_id = str(match["match_id"])
         home_team = team_name(match.get("home_team", ""), teams)
         away_team = team_name(match.get("away_team", ""), teams)
@@ -3907,6 +3911,159 @@ def per_match_score_options(
     return options, len(options) - 1
 
 
+def knockout_round_options() -> list[tuple[str, str]]:
+    return [
+        ("round_of_32", "Round of 32"),
+        ("round_of_16", "Round of 16"),
+        ("quarter_final", "Quarter-finals"),
+        ("semi_final", "Semi-finals"),
+        ("third_place", "Third-place match"),
+        ("final", "Final"),
+    ]
+
+
+def knockout_round_points(stage: str) -> int:
+    if stage == "round_of_32":
+        return KNOCKOUT_STAGE_POINTS["round_of_16"]
+    if stage == "round_of_16":
+        return KNOCKOUT_STAGE_POINTS["quarter_final"]
+    if stage == "quarter_final":
+        return KNOCKOUT_STAGE_POINTS["semi_final"]
+    if stage == "semi_final":
+        return KNOCKOUT_STAGE_POINTS["final"]
+    if stage == "third_place":
+        return THIRD_PLACE_WINNER_POINTS
+    if stage == "final":
+        return CHAMPION_POINTS
+    return 0
+
+
+def knockout_round_advancement_label(stage: str) -> str:
+    labels = {
+        "round_of_32": "Predicted to reach Round of 16",
+        "round_of_16": "Predicted to reach quarter-finals",
+        "quarter_final": "Predicted to reach semi-finals",
+        "semi_final": "Predicted to reach final",
+        "third_place": "Predicted third-place winner",
+        "final": "Predicted champion",
+    }
+    return labels.get(stage, "Predicted to advance")
+
+
+def knockout_result_text(row: dict[str, Any] | pd.Series | None, teams: pd.DataFrame) -> str:
+    if row is None:
+        return "-"
+    home_id = str(row.get("home_team", "")).strip()
+    away_id = str(row.get("away_team", "")).strip()
+    if not home_id or not away_id:
+        return "-"
+    score = completed_score(row)
+    if score is None:
+        return f"{team_name(home_id, teams)} vs {team_name(away_id, teams)}"
+    home_goals, away_goals = score
+    text = f"{team_name(home_id, teams)} {home_goals}-{away_goals} {team_name(away_id, teams)}"
+    if home_goals == away_goals:
+        winner_id = str(row.get("winner", "")).strip()
+        if winner_id:
+            text = f"{text}, {team_name(winner_id, teams)} on penalties"
+    return text
+
+
+def render_knockout_progression_scores(
+    participants: list[dict[str, Any]],
+    results: pd.DataFrame,
+    teams: pd.DataFrame,
+    matches: pd.DataFrame,
+    knockout_matchups: pd.DataFrame,
+    third_place_combinations: pd.DataFrame,
+) -> None:
+    options = knockout_round_options()
+    labels = [label for _, label in options]
+    selected_label = st.selectbox(
+        "Knockout round",
+        labels,
+        key="per_match_knockout_stage",
+    )
+    selected_stage = dict((label, stage) for stage, label in options)[selected_label]
+    round_matches = matches[matches["stage"].eq(selected_stage)]
+    if round_matches.empty:
+        st.info("No matches are available for this knockout round.")
+        return
+
+    actual_state = derive_tournament_state(
+        teams,
+        matches,
+        results,
+        knockout_matchups,
+        third_place_combinations,
+        use_cards=True,
+    )
+    actual_winners = {
+        winner
+        for match_id, winner in actual_state["winners"].items()
+        if match_id in set(round_matches["match_id"]) and winner
+    }
+    stage_points = knockout_round_points(selected_stage)
+    advancement_label = knockout_round_advancement_label(selected_stage)
+
+    rows = []
+    detail_rows: dict[str, list[dict[str, str]]] = {}
+    for participant in participants:
+        prediction_state = derive_tournament_state(
+            teams,
+            matches,
+            participant["predictions"],
+            knockout_matchups,
+            third_place_combinations,
+            use_cards=False,
+        )
+        predicted_resolved_rows = score_lookup(prediction_state["resolved_matches"])
+        predicted_winners = [
+            prediction_state["winners"].get(str(match_id), "")
+            for match_id in round_matches["match_id"]
+        ]
+        predicted_winners = [winner for winner in predicted_winners if winner]
+        predicted_winner_set = set(predicted_winners)
+        correct_count = len(predicted_winner_set & actual_winners) if actual_winners else 0
+        correct_display = f"{correct_count}/{len(actual_winners)}" if actual_winners else "-"
+        points_display = str(correct_count * stage_points) if actual_winners else "-"
+        predicted_team_names = ", ".join(team_name(team_id, teams) for team_id in predicted_winners) or "-"
+
+        rows.append(
+            {
+                "User name": participant["user_name"],
+                "Correct": correct_display,
+                "Progression points earned": points_display,
+                advancement_label: predicted_team_names,
+            }
+        )
+        detail_rows[participant["user_name"]] = [
+            {
+                "Predicted result": knockout_result_text(
+                    predicted_resolved_rows.get(str(match_id)), teams
+                ),
+            }
+            for match_id in round_matches["match_id"]
+        ]
+
+    render_centered_dataframe(
+        pd.DataFrame(rows),
+        {"User name", advancement_label},
+        bold_columns={"Progression points earned"},
+    )
+
+    for row in rows:
+        summary = (
+            f"{row['User name']} · {row['Correct']} correct · "
+            f"{row['Progression points earned']} points"
+        )
+        with st.expander(summary):
+            render_centered_dataframe(
+                pd.DataFrame(detail_rows[row["User name"]]),
+                {"Predicted result"},
+            )
+
+
 def render_per_match_scores(
     users: pd.DataFrame,
     results: pd.DataFrame,
@@ -3919,18 +4076,7 @@ def render_per_match_scores(
     ais = load_ai_predictions()
     human_names = sorted([participant["user_name"] for participant in humans], key=str.lower)
     ai_names = sorted([participant["user_name"] for participant in ais], key=str.lower)
-    match_options, default_match_index = per_match_score_options(results, matches, teams)
-    if not match_options:
-        st.info("No matches are available.")
-        return
-    match_labels = [label for _, label in match_options]
-    selected_match_label = st.selectbox(
-        "Match",
-        match_labels,
-        index=default_match_index,
-        key="per_match_match",
-    )
-    selected_match_id = dict((label, match_id) for match_id, label in match_options)[selected_match_label]
+    phase = st.selectbox("Phase", ["Group stage", "Knockout phase"], key="per_match_phase")
     user_col, ai_col = st.columns([0.6, 0.4])
     with user_col:
         selected_humans = st.multiselect("Users", human_names, default=human_names, key="per_match_users")
@@ -3941,6 +4087,31 @@ def render_per_match_scores(
         + [p for p in ais if p["user_name"] in selected_ais],
         key=lambda participant: participant["user_name"].lower(),
     )
+    if phase == "Knockout phase":
+        render_knockout_progression_scores(
+            participants,
+            results,
+            teams,
+            matches,
+            knockout_matchups,
+            third_place_combinations,
+        )
+        return
+
+    match_options, default_match_index = per_match_score_options(
+        results, matches, teams, stage_filter=[GROUP_STAGE]
+    )
+    if not match_options:
+        st.info("No group-stage matches are available.")
+        return
+    match_labels = [label for _, label in match_options]
+    selected_match_label = st.selectbox(
+        "Match",
+        match_labels,
+        index=default_match_index,
+        key="per_match_match",
+    )
+    selected_match_id = dict((label, match_id) for match_id, label in match_options)[selected_match_label]
     match = matches[matches["match_id"].eq(selected_match_id)].iloc[0]
     scoped_results = results_through_match(results, matches, selected_match_id)
     actual_rows = score_lookup(scoped_results)
