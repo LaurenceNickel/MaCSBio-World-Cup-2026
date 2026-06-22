@@ -3,7 +3,6 @@ from __future__ import annotations
 import ast
 import base64
 import html
-import itertools
 import json
 import re
 import time
@@ -113,16 +112,7 @@ CARD_COLUMNS = [
     "away_indirect_red_cards",
     "away_direct_red_cards",
 ]
-CACHE_SCHEMA_VERSION = "confirmed-placement-v4"
-QUALIFICATION_STATUS_MAX_REMAINING_MATCHES = 2
-QUALIFICATION_STATUS_SCORELINES = (
-    (0, 0),
-    (99, 99),
-    (1, 0),
-    (99, 0),
-    (0, 1),
-    (0, 99),
-)
+CACHE_SCHEMA_VERSION = "confirmed-placement-v5"
 
 
 DEFAULT_THEME = {
@@ -914,9 +904,6 @@ def apply_visual_theme() -> None:
 def clear_stale_streamlit_cache() -> None:
     if st.session_state.get("cache_schema_version") == CACHE_SCHEMA_VERSION:
         return
-    clear_cache = getattr(st.cache_data, "clear", None)
-    if callable(clear_cache):
-        clear_cache()
     st.session_state["cache_schema_version"] = CACHE_SCHEMA_VERSION
 
 
@@ -1901,24 +1888,23 @@ def confirmed_group_position_slots(
     matches: pd.DataFrame,
     score_df: pd.DataFrame,
     teams: pd.DataFrame,
-    possible_positions_by_group: dict[str, dict[str, set[int]]] | None = None,
 ) -> set[str]:
     confirmed_slots: set[str] = set()
 
     for group, table in group_standings.items():
         if group_is_complete(group, matches, score_df, teams):
-            confirmed_slots.update(f"{position + 1}{group}" for position in range(len(table)))
+            confirmed_slots.update(f"{position + 1}{group}" for position in range(min(3, len(table))))
             continue
 
-        possible_positions = (
-            (possible_positions_by_group or {}).get(group)
-            or possible_group_positions(group, matches, score_df, teams, use_cards=True)
-        )
-        if not possible_positions:
-            continue
-        for position, row in enumerate(table.itertuples(index=False)):
+        context = group_lock_context(group, table, matches, score_df, teams)
+        for position, row in enumerate(table.head(3).itertuples(index=False)):
             team_id = str(getattr(row, "team_id"))
-            if possible_positions.get(team_id) == {position + 1}:
+            teams_that_can_finish_above = sum(
+                1
+                for other_id in context["team_ids"]
+                if other_id != team_id and can_finish_above(other_id, team_id, context)
+            )
+            if teams_that_can_finish_above == position:
                 confirmed_slots.add(f"{position + 1}{group}")
 
     return confirmed_slots
@@ -1945,21 +1931,9 @@ def derive_tournament_state(
     group_standings = calculate_group_standings(teams, matches, score_df, use_cards)
     third_place = calculate_third_place_standings(group_standings, teams)
     confirmed_position_slots = None
-    possible_positions_by_group: dict[str, dict[str, set[int]]] = {}
     third_place_for_combination = third_place
     if require_confirmed_placements:
-        possible_positions_by_group = {
-            group: possible_group_positions(group, matches, score_df, teams, use_cards=True)
-            for group in GROUPS
-            if not group_is_complete(group, matches, score_df, teams)
-        }
-        confirmed_position_slots = confirmed_group_position_slots(
-            group_standings,
-            matches,
-            score_df,
-            teams,
-            possible_positions_by_group,
-        )
+        confirmed_position_slots = confirmed_group_position_slots(group_standings, matches, score_df, teams)
         if all(group_is_complete(group, matches, score_df, teams) for group in GROUPS):
             third_place_for_combination = third_place
         else:
@@ -2041,7 +2015,6 @@ def derive_tournament_state(
         "winners": winners,
         "losers": losers,
         "confirmed_position_slots": confirmed_position_slots or set(),
-        "possible_positions_by_group": possible_positions_by_group,
     }
 
 
@@ -2250,36 +2223,78 @@ def ordered_group_rows_from_score_rows(
     }
 
 
-@st.cache_data(show_spinner=False, hash_funcs={pd.DataFrame: dataframe_cache_key})
-def possible_group_positions(
+def head_to_head_points_between(
+    team_id: str,
+    other_id: str,
+    group_matches: pd.DataFrame,
+    score_rows: dict[str, dict[str, Any]],
+) -> tuple[int, int] | None:
+    for _, match in group_matches.iterrows():
+        home_id = str(match["home_team"])
+        away_id = str(match["away_team"])
+        if {home_id, away_id} != {team_id, other_id}:
+            continue
+        score = completed_score(score_rows.get(str(match["match_id"])))
+        if score is None:
+            return None
+        home_goals, away_goals = score
+        if home_goals == away_goals:
+            return 1, 1
+        home_points, away_points = (3, 0) if home_goals > away_goals else (0, 3)
+        if team_id == home_id:
+            return home_points, away_points
+        return away_points, home_points
+    return None
+
+
+def group_lock_context(
     group: str,
+    table: pd.DataFrame,
     matches: pd.DataFrame,
     results: pd.DataFrame,
     teams: pd.DataFrame,
-    use_cards: bool,
-    cache_schema_version: str = CACHE_SCHEMA_VERSION,
-) -> dict[str, set[int]]:
-    remaining = remaining_group_matches(group, matches, results, teams)
-    if len(remaining) > QUALIFICATION_STATUS_MAX_REMAINING_MATCHES:
-        return {}
+) -> dict[str, Any]:
+    score_rows = score_lookup(results)
+    group_matches = group_match_rows(group, matches, teams)
+    team_ids = [str(team_id) for team_id in table["team_id"]]
+    points = {str(row["team_id"]): to_int(row["points"]) for _, row in table.iterrows()}
+    remaining_by_team = {team_id: 0 for team_id in team_ids}
+    for _, match in group_matches.iterrows():
+        if completed_score(score_rows.get(str(match["match_id"]))) is not None:
+            continue
+        remaining_by_team[str(match["home_team"])] += 1
+        remaining_by_team[str(match["away_team"])] += 1
+    max_points = {
+        team_id: points.get(team_id, 0) + 3 * remaining_by_team.get(team_id, 0)
+        for team_id in team_ids
+    }
+    return {
+        "group_matches": group_matches,
+        "score_rows": score_rows,
+        "team_ids": team_ids,
+        "points": points,
+        "max_points": max_points,
+    }
 
-    positions: dict[str, set[int]] = {}
-    base_score_rows = score_lookup(results)
-    remaining_records = remaining.to_dict("records")
-    for scorelines in itertools.product(QUALIFICATION_STATUS_SCORELINES, repeat=len(remaining_records)):
-        score_rows = dict(base_score_rows)
-        for match, (home_goals, away_goals) in zip(remaining_records, scorelines):
-            score_rows[str(match["match_id"])] = {
-                "match_id": match["match_id"],
-                "home_goals": home_goals,
-                "away_goals": away_goals,
-                PENALTY_WINNER_COLUMN: "",
-                **{column: "" for column in CARD_COLUMNS},
-            }
-        table = group_standing_from_score_rows(group, teams, matches, score_rows, use_cards)
-        for position, team_id in enumerate(table["team_id"], start=1):
-            positions.setdefault(str(team_id), set()).add(position)
-    return positions
+
+def can_finish_above(team_id: str, other_id: str, context: dict[str, Any]) -> bool:
+    team_max = context["max_points"].get(team_id, 0)
+    other_points = context["points"].get(other_id, 0)
+    if team_max > other_points:
+        return True
+    if team_max < other_points:
+        return False
+
+    h2h = head_to_head_points_between(
+        team_id,
+        other_id,
+        context["group_matches"],
+        context["score_rows"],
+    )
+    if h2h is None:
+        return True
+    team_h2h_points, other_h2h_points = h2h
+    return team_h2h_points >= other_h2h_points
 
 
 def match_score_points_for_match(
@@ -2755,7 +2770,6 @@ def group_qualification_statuses(
     matches: pd.DataFrame,
     results: pd.DataFrame,
     teams: pd.DataFrame,
-    possible_positions_by_group: dict[str, dict[str, set[int]]] | None = None,
 ) -> dict[str, str]:
     statuses: dict[str, str] = {}
     advancing_team_ids = advancing_team_ids_from_standings(group_standings, third_place)
@@ -2774,17 +2788,21 @@ def group_qualification_statuses(
                     statuses[team_id] = "eliminated"
             continue
 
-        possible_positions = (
-            (possible_positions_by_group or {}).get(group)
-            or possible_group_positions(group, matches, results, teams, use_cards=True)
-        )
-        if not possible_positions:
-            continue
+        context = group_lock_context(group, table, matches, results, teams)
         for team_id in group_team_ids:
-            team_positions = possible_positions.get(team_id, set())
-            if team_positions and max(team_positions) <= 2:
+            teams_that_can_finish_above = sum(
+                1
+                for other_id in context["team_ids"]
+                if other_id != team_id and can_finish_above(other_id, team_id, context)
+            )
+            teams_team_can_finish_above = sum(
+                1
+                for other_id in context["team_ids"]
+                if other_id != team_id and can_finish_above(team_id, other_id, context)
+            )
+            if teams_that_can_finish_above <= 1:
                 statuses[team_id] = "advanced"
-            elif team_positions and min(team_positions) >= 4:
+            elif teams_team_can_finish_above == 0:
                 statuses[team_id] = "eliminated"
 
     return statuses
@@ -3137,7 +3155,6 @@ def render_readonly_results_inputs(
     teams: pd.DataFrame,
     group_standings: dict[str, pd.DataFrame],
     third_place: pd.DataFrame,
-    possible_positions_by_group: dict[str, dict[str, set[int]]] | None = None,
 ) -> None:
     group_by_team = dict(zip(teams["team_id"], teams["group"]))
     advancing_team_ids = advancing_team_ids_from_standings(group_standings, third_place)
@@ -3159,7 +3176,6 @@ def render_readonly_results_inputs(
         matches,
         scoped_results,
         teams,
-        possible_positions_by_group,
     )
 
     for group in GROUPS:
@@ -3448,7 +3464,6 @@ def render_results(
         teams,
         state["group_standings"],
         state["third_place"],
-        state["possible_positions_by_group"],
     )
 
 
