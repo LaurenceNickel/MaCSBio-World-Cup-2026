@@ -4099,6 +4099,7 @@ def render_knockout_progression_scores(
 
     rows = []
     detail_rows: dict[str, list[str]] = {}
+    predicted_counts: dict[str, int] = {}
     for participant in participants:
         prediction_state = derive_tournament_state(
             teams,
@@ -4114,6 +4115,8 @@ def render_knockout_progression_scores(
             for match_id in round_matches["match_id"]
         ]
         predicted_winners = [winner for winner in predicted_winners if winner]
+        for winner in predicted_winners:
+            predicted_counts[winner] = predicted_counts.get(winner, 0) + 1
         predicted_winner_set = set(predicted_winners)
         correct_count = len(predicted_winner_set & actual_winners) if actual_winners else 0
         correct_display = f"{correct_count}/{len(actual_winners)}" if actual_winners else "-"
@@ -4131,9 +4134,31 @@ def render_knockout_progression_scores(
             }
         )
         detail_rows[participant["user_name"]] = [
-            knockout_result_text(predicted_resolved_rows.get(str(match_id)), teams)
-            for match_id in round_matches["match_id"]
+            result
+            for result in sorted(
+                knockout_result_text(predicted_resolved_rows.get(str(match_id)), teams)
+                for match_id in round_matches["match_id"]
+            )
         ]
+
+    if participants and predicted_counts:
+        summary_rows = [
+            {
+                "Team": team_name(team_id, teams),
+                "Predictions": count,
+                "Percentage": f"{round(100 * count / len(participants), 1)}%",
+            }
+            for team_id, count in predicted_counts.items()
+        ]
+        summary_table = pd.DataFrame(summary_rows).sort_values(
+            ["Predictions", "Team"], ascending=[False, True]
+        )
+        st.subheader("Most Predicted Teams to Advance")
+        render_centered_dataframe(
+            summary_table,
+            {"Team"},
+            bold_columns={"Percentage"},
+        )
 
     render_knockout_progression_table(rows, detail_rows, advancement_label)
 
