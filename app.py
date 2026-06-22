@@ -4427,8 +4427,6 @@ def knockout_team_progress_status(
                 return "pending"
             return "advanced" if winner_id == team_id else "eliminated"
     group_status = (qualification_statuses or {}).get(str(team_id), "")
-    if group_status == "advanced":
-        return "advanced"
     if group_status == "eliminated":
         return "eliminated"
     return "eliminated" if entrants_locked else "pending"
