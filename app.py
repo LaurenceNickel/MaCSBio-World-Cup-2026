@@ -4236,10 +4236,10 @@ def render_knockout_progression_scores(
         summary_rows = [
             {
                 "Team": team_name(team_id, teams),
-                "Predictions": predicted_counts.get(str(team_id), 0),
-                "Percentage": f"{round(100 * predicted_counts.get(str(team_id), 0) / len(participants), 1)}%",
+                "Predictions": count,
+                "Percentage": f"{round(100 * count / len(participants), 1)}%",
             }
-            for team_id in teams["team_id"]
+            for team_id, count in predicted_counts.items()
         ]
         summary_table = pd.DataFrame(summary_rows).sort_values(
             ["Predictions", "Team"], ascending=[False, True]
