@@ -3310,7 +3310,13 @@ def render_prediction_panel(
 
     predictions = make_score_df_from_session(matches, user_id)
     state = derive_tournament_state(
-        teams, matches, predictions, knockout_matchups, third_place_combinations, use_cards=False
+        teams,
+        matches,
+        predictions,
+        knockout_matchups,
+        third_place_combinations,
+        use_cards=False,
+        require_confirmed_placements=True,
     )
 
     st.subheader("Group Stage")
