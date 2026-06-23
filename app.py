@@ -112,7 +112,7 @@ CARD_COLUMNS = [
     "away_indirect_red_cards",
     "away_direct_red_cards",
 ]
-CACHE_SCHEMA_VERSION = "confirmed-placement-v6"
+CACHE_SCHEMA_VERSION = "confirmed-placement-v7"
 
 
 DEFAULT_THEME = {
@@ -904,6 +904,7 @@ def apply_visual_theme() -> None:
 def clear_stale_streamlit_cache() -> None:
     if st.session_state.get("cache_schema_version") == CACHE_SCHEMA_VERSION:
         return
+    st.cache_data.clear()
     st.session_state["cache_schema_version"] = CACHE_SCHEMA_VERSION
 
 
