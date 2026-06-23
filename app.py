@@ -112,7 +112,7 @@ CARD_COLUMNS = [
     "away_indirect_red_cards",
     "away_direct_red_cards",
 ]
-CACHE_SCHEMA_VERSION = "confirmed-placement-v5"
+CACHE_SCHEMA_VERSION = "confirmed-placement-v6"
 
 
 DEFAULT_THEME = {
