@@ -1897,14 +1897,17 @@ def confirmed_group_position_slots(
             continue
 
         context = group_lock_context(group, table, matches, score_df, teams)
-        for position, row in enumerate(table.head(3).itertuples(index=False)):
-            team_id = str(getattr(row, "team_id"))
-            teams_that_can_finish_above = sum(
-                1
-                for other_id in context["team_ids"]
-                if other_id != team_id and can_finish_above(other_id, team_id, context)
+        ordered_team_ids = [str(team_id) for team_id in table["team_id"]]
+        for position, team_id in enumerate(ordered_team_ids[:3]):
+            teams_above = ordered_team_ids[:position]
+            teams_below = ordered_team_ids[position + 1 :]
+            can_overtake_team_above = any(
+                can_finish_above(team_id, other_id, context) for other_id in teams_above
             )
-            if teams_that_can_finish_above == position:
+            can_be_overtaken_by_team_below = any(
+                can_finish_above(other_id, team_id, context) for other_id in teams_below
+            )
+            if not can_overtake_team_above and not can_be_overtaken_by_team_below:
                 confirmed_slots.add(f"{position + 1}{group}")
 
     return confirmed_slots
