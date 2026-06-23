@@ -112,7 +112,7 @@ CARD_COLUMNS = [
     "away_indirect_red_cards",
     "away_direct_red_cards",
 ]
-CACHE_SCHEMA_VERSION = "confirmed-placement-v7"
+CACHE_SCHEMA_VERSION = "blank-score-widgets-v8"
 
 
 DEFAULT_THEME = {
@@ -1328,8 +1328,8 @@ def restore_prediction_widgets(predictions: pd.DataFrame, matches: pd.DataFrame,
         row = existing_lookup.get(match_id)
         home = None if row is None else optional_natural(row["home_goals"])
         away = None if row is None else optional_natural(row["away_goals"])
-        st.session_state[f"pred_home_{match_id}"] = 0 if home is None else home
-        st.session_state[f"pred_away_{match_id}"] = 0 if away is None else away
+        st.session_state[f"pred_home_{match_id}"] = home
+        st.session_state[f"pred_away_{match_id}"] = away
         st.session_state[f"pred_penalty_{match_id}"] = (
             "" if row is None else str(row.get(PENALTY_WINNER_COLUMN, "")).strip()
         )
@@ -2968,7 +2968,7 @@ def group_prediction_is_complete(matches: pd.DataFrame) -> bool:
     return True
 
 
-def guard_knockout_prediction(field_key: str, group_match_ids: list[str], reset_value: Any = 0) -> None:
+def guard_knockout_prediction(field_key: str, group_match_ids: list[str], reset_value: Any = None) -> None:
     for match_id in group_match_ids:
         home = optional_natural(st.session_state.get(f"pred_home_{match_id}", ""))
         away = optional_natural(st.session_state.get(f"pred_away_{match_id}", ""))
@@ -2995,7 +2995,7 @@ def render_group_required_dialog() -> None:
 
 def normalize_prediction_widget_value(key: str) -> None:
     value = optional_natural(st.session_state.get(key, ""))
-    st.session_state[key] = 0 if value is None else value
+    st.session_state[key] = value
 
 
 def group_predictions_are_complete(group_match_ids: list[str]) -> bool:
@@ -3019,7 +3019,7 @@ def render_goal_control(
         min_value=0,
         max_value=99,
         step=1,
-        value=0,
+        value=None,
         format="%d",
         key=key,
         label_visibility=label_visibility,
