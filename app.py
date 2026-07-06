@@ -4447,6 +4447,30 @@ def sync_default_per_match_phase(results: pd.DataFrame, matches: pd.DataFrame, p
     return default_index
 
 
+def sync_default_per_user_phase(results: pd.DataFrame, matches: pd.DataFrame, phase_options: list[str]) -> int:
+    default_index = default_per_match_phase_index(results, matches)
+    default_phase = phase_options[default_index]
+    default_state_key = "per_user_phase_default"
+    if st.session_state.get(default_state_key) != default_phase:
+        st.session_state["per_user_phase"] = default_phase
+        st.session_state[default_state_key] = default_phase
+    return default_index
+
+
+def sync_default_per_user_knockout_stage(
+    options: list[tuple[str, str]],
+    results: pd.DataFrame,
+    matches: pd.DataFrame,
+) -> int:
+    default_index = current_knockout_round_index(options, results, matches)
+    default_stage = options[default_index][1]
+    default_state_key = "per_user_knockout_stage_default"
+    if st.session_state.get(default_state_key) != default_stage:
+        st.session_state["per_user_knockout_stage"] = default_stage
+        st.session_state[default_state_key] = default_stage
+    return default_index
+
+
 def knockout_round_entrants_locked(stage: str, results: pd.DataFrame, matches: pd.DataFrame) -> bool:
     previous_stage = {
         "round_of_32": GROUP_STAGE,
@@ -4910,13 +4934,31 @@ def render_per_user_scores(
         )
     with ai_col:
         selected_ais = st.multiselect("AI predictions", ai_names, key="per_user_ai")
-    phase = st.selectbox("Phase", ["Group stage", "Knockout phase"], key="per_user_phase")
+    phase_options = ["Group stage", "Knockout phase"]
+    phase = st.selectbox(
+        "Phase",
+        phase_options,
+        index=sync_default_per_user_phase(results, matches, phase_options),
+        key="per_user_phase",
+    )
     selected = sorted(
         [participant for participant in humans if participant["user_name"] in selected_humans]
         + [participant for participant in ais if participant["user_name"] in selected_ais],
         key=lambda participant: participant["user_name"].lower(),
     )
-    stage_filter = [GROUP_STAGE] if phase == "Group stage" else KNOCKOUT_STAGES
+    if phase == "Group stage":
+        stage_filter = [GROUP_STAGE]
+    else:
+        options = knockout_round_options()
+        labels = [label for _, label in options]
+        selected_label = st.selectbox(
+            "Stage",
+            labels,
+            index=sync_default_per_user_knockout_stage(options, results, matches),
+            key="per_user_knockout_stage",
+        )
+        selected_stage = dict((label, stage) for stage, label in options)[selected_label]
+        stage_filter = [selected_stage]
     rows = []
     actual_rows = score_lookup(results)
     prediction_rows = {
