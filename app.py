@@ -3875,6 +3875,143 @@ def leaderboard_timeline_cache_file(cache_key: str) -> Path:
     return LEADERBOARD_SNAPSHOTS_DIR / f"timeline_{cache_key}.csv"
 
 
+def leaderboard_cache_manifest_file() -> Path:
+    return LEADERBOARD_SNAPSHOTS_DIR / "manifest.json"
+
+
+def leaderboard_warm_cache_key(
+    humans: list[dict[str, Any]],
+    ais: list[dict[str, Any]],
+    results: pd.DataFrame,
+    teams: pd.DataFrame,
+    matches: pd.DataFrame,
+    knockout_matchups: pd.DataFrame,
+    third_place_combinations: pd.DataFrame,
+) -> str:
+    key_parts = {
+        "schema": "leaderboard-warm-v1",
+        "humans": participant_cache_signatures(humans),
+        "ais": participant_cache_signatures(ais),
+        "results": dataframe_cache_key(results),
+        "teams": dataframe_cache_key(teams),
+        "matches": dataframe_cache_key(matches),
+        "knockout_matchups": dataframe_cache_key(knockout_matchups),
+        "third_place_combinations": dataframe_cache_key(third_place_combinations),
+    }
+    encoded = json.dumps(key_parts, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def leaderboard_cache_is_warm(cache_key: str) -> bool:
+    path = leaderboard_cache_manifest_file()
+    if not path.exists():
+        return False
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return False
+    return manifest.get("cache_key") == cache_key
+
+
+def write_leaderboard_cache_manifest(cache_key: str) -> None:
+    LEADERBOARD_SNAPSHOTS_DIR.mkdir(exist_ok=True)
+    leaderboard_cache_manifest_file().write_text(
+        json.dumps({"cache_key": cache_key, "created_at": time.time()}, indent=2),
+        encoding="utf-8",
+    )
+
+
+def warm_leaderboard_caches(
+    users: pd.DataFrame,
+    results: pd.DataFrame,
+    teams: pd.DataFrame,
+    matches: pd.DataFrame,
+    knockout_matchups: pd.DataFrame,
+    third_place_combinations: pd.DataFrame,
+) -> None:
+    LEADERBOARD_SNAPSHOTS_DIR.mkdir(exist_ok=True)
+    humans = leaderboard_participants(users, include_ai=False)
+    ais = load_ai_predictions()
+    cache_key = leaderboard_warm_cache_key(
+        humans,
+        ais,
+        results,
+        teams,
+        matches,
+        knockout_matchups,
+        third_place_combinations,
+    )
+    if leaderboard_cache_is_warm(cache_key):
+        return
+
+    checkpoints = leaderboard_checkpoint_options(
+        results,
+        matches,
+        teams,
+        knockout_matchups,
+        third_place_combinations,
+    )
+    for checkpoint in checkpoints:
+        scoped_results = results_through_match(results, matches, str(checkpoint["through_match_id"]))
+        persisted_leaderboard_snapshot(
+            str(checkpoint["checkpoint_id"]),
+            humans,
+            scoped_results,
+            teams,
+            matches,
+            knockout_matchups,
+            third_place_combinations,
+            awarded_group_standings=set(checkpoint["awarded_group_standings"]),
+        )
+
+    completed_ids = completed_match_ids(results, matches)
+    group_stage_results = results_for_stage(results, matches, GROUP_STAGE)
+    persisted_leaderboard_snapshot(
+        "group_stage:additional_rankings",
+        humans,
+        group_stage_results,
+        teams,
+        matches,
+        knockout_matchups,
+        third_place_combinations,
+    )
+    if completed_ids:
+        latest_results = results_through_match(results, matches, completed_ids[-1])
+        persisted_leaderboard_snapshot(
+            f"default_humans:{completed_ids[-1]}",
+            humans,
+            latest_results,
+            teams,
+            matches,
+            knockout_matchups,
+            third_place_combinations,
+        )
+        all_participants = [*humans, *ais]
+        persisted_leaderboard_snapshot(
+            f"human_vs_ai:{completed_ids[-1]}",
+            all_participants,
+            latest_results,
+            teams,
+            matches,
+            knockout_matchups,
+            third_place_combinations,
+        )
+        persisted_leaderboard_snapshot(
+            "human_vs_ai:group_stage",
+            all_participants,
+            group_stage_results,
+            teams,
+            matches,
+            knockout_matchups,
+            third_place_combinations,
+        )
+
+    timeline_table(humans, results, teams, matches, knockout_matchups, third_place_combinations)
+    if ais:
+        timeline_table(ais, results, teams, matches, knockout_matchups, third_place_combinations)
+    write_leaderboard_cache_manifest(cache_key)
+
+
 def completed_match_options(results: pd.DataFrame, matches: pd.DataFrame, teams: pd.DataFrame) -> list[tuple[str, str]]:
     result_rows = score_lookup(results)
     options = []
@@ -5373,14 +5510,11 @@ def render_timelines(
         if not full_rank_timeline.empty
         else full_rank_timeline
     )
-    selected_ai_participants = [p for p in ais if p["user_name"] in selected_ais]
-    ai_score_timeline = timeline_table(
-        selected_ai_participants,
-        results,
-        teams,
-        matches,
-        knockout_matchups,
-        third_place_combinations,
+    ai_rank_timeline = timeline_table(ais, results, teams, matches, knockout_matchups, third_place_combinations)
+    ai_score_timeline = (
+        ai_rank_timeline[ai_rank_timeline["User name"].isin(selected_ais)]
+        if not ai_rank_timeline.empty
+        else ai_rank_timeline
     )
     score_timeline = pd.concat(
         [human_score_timeline, ai_score_timeline],
@@ -5639,6 +5773,15 @@ def render_leaderboard(
     third_place_combinations: pd.DataFrame,
 ) -> None:
     st.header("Leaderboard")
+    with st.spinner("Updating leaderboard cache..."):
+        warm_leaderboard_caches(
+            users,
+            results,
+            teams,
+            matches,
+            knockout_matchups,
+            third_place_combinations,
+        )
     sections = [
         "Leaderboard",
         "Additional Rankings",
