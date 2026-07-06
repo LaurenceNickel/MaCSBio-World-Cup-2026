@@ -1110,6 +1110,40 @@ def write_tabular_cache_sheet(
     write_sheet(sheet_name, updated, columns)
 
 
+def read_single_cache_sheet(
+    sheet_name: str,
+    cache_key: str,
+    value_columns: list[str],
+) -> pd.DataFrame | None:
+    if not google_sheets_enabled():
+        return None
+    columns = ["cache_key", *value_columns]
+    cache = read_sheet(sheet_name, tuple(columns))
+    if cache.empty or "cache_key" not in cache.columns:
+        return None
+    if not cache["cache_key"].astype(str).eq(str(cache_key)).all():
+        return None
+    return cache[value_columns].reset_index(drop=True)
+
+
+def write_single_cache_sheet(
+    sheet_name: str,
+    cache_key: str,
+    table: pd.DataFrame,
+    value_columns: list[str],
+) -> None:
+    if not google_sheets_enabled():
+        return
+    columns = ["cache_key", *value_columns]
+    cache_rows = table.copy().fillna("")
+    for column in value_columns:
+        if column not in cache_rows.columns:
+            cache_rows[column] = ""
+    cache_rows = cache_rows[value_columns]
+    cache_rows.insert(0, "cache_key", cache_key)
+    write_sheet(sheet_name, cache_rows, columns)
+
+
 def sheet_columns_for_path(path: Path) -> tuple[str, ...]:
     if path == USERS_FILE:
         return tuple(USERS_COLUMNS)
@@ -3727,6 +3761,7 @@ LEADERBOARD_SNAPSHOT_NUMERIC_COLUMNS = [
     "exact_goal_components",
     "exact_scores",
 ]
+LEADERBOARD_DISPLAY_COLUMNS = [*LEADERBOARD_SNAPSHOT_COLUMNS, "rank_change"]
 LEADERBOARD_TIMELINE_COLUMNS = ["Match", "User name", "Participant type", "Points", "Rank"]
 
 
@@ -3837,6 +3872,79 @@ def leaderboard_snapshot_cache_key(
 
 def leaderboard_snapshot_cache_file(cache_key: str) -> Path:
     return LEADERBOARD_SNAPSHOTS_DIR / f"{cache_key}.csv"
+
+
+def current_leaderboard_cache_key(
+    users: pd.DataFrame,
+    results: pd.DataFrame,
+    teams: pd.DataFrame,
+    matches: pd.DataFrame,
+    knockout_matchups: pd.DataFrame,
+    third_place_combinations: pd.DataFrame,
+    selected_checkpoint: dict[str, Any],
+) -> str:
+    user_signature = tuple(
+        (str(row["user_id"]), str(row["user_name"]))
+        for _, row in users[["user_id", "user_name"]].iterrows()
+    )
+    key_parts = {
+        "schema": "current-leaderboard-display-v1",
+        "users": user_signature,
+        "results": dataframe_cache_key(results),
+        "teams": dataframe_cache_key(teams),
+        "matches": dataframe_cache_key(matches),
+        "knockout_matchups": dataframe_cache_key(knockout_matchups),
+        "third_place_combinations": dataframe_cache_key(third_place_combinations),
+        "checkpoint_id": str(selected_checkpoint["checkpoint_id"]),
+        "through_match_id": str(selected_checkpoint["through_match_id"]),
+        "awarded_group_standings": tuple(sorted(selected_checkpoint["awarded_group_standings"])),
+    }
+    encoded = json.dumps(key_parts, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def current_leaderboard_cache_file(cache_key: str) -> Path:
+    return LEADERBOARD_SNAPSHOTS_DIR / f"current_{cache_key}.csv"
+
+
+def normalize_leaderboard_display_snapshot(snapshot: pd.DataFrame) -> pd.DataFrame:
+    for column in LEADERBOARD_DISPLAY_COLUMNS:
+        if column not in snapshot.columns:
+            snapshot[column] = "-" if column == "rank_change" else ""
+    snapshot = normalize_leaderboard_snapshot(snapshot)
+    if "rank_change" not in snapshot.columns:
+        snapshot["rank_change"] = "-"
+    return snapshot[LEADERBOARD_DISPLAY_COLUMNS]
+
+
+def read_current_leaderboard_cache(cache_key: str) -> pd.DataFrame | None:
+    cache_file = current_leaderboard_cache_file(cache_key)
+    if google_sheets_enabled():
+        cached_sheet = read_single_cache_sheet(
+            LEADERBOARD_SNAPSHOT_CACHE_SHEET,
+            cache_key,
+            LEADERBOARD_DISPLAY_COLUMNS,
+        )
+        if cached_sheet is not None:
+            snapshot = normalize_leaderboard_display_snapshot(cached_sheet)
+            LEADERBOARD_SNAPSHOTS_DIR.mkdir(exist_ok=True)
+            snapshot.to_csv(cache_file, index=False)
+            return snapshot
+    if cache_file.exists():
+        return normalize_leaderboard_display_snapshot(pd.read_csv(cache_file, dtype=str).fillna(""))
+    return None
+
+
+def write_current_leaderboard_cache(cache_key: str, snapshot: pd.DataFrame) -> None:
+    LEADERBOARD_SNAPSHOTS_DIR.mkdir(exist_ok=True)
+    snapshot = normalize_leaderboard_display_snapshot(snapshot)
+    snapshot.to_csv(current_leaderboard_cache_file(cache_key), index=False)
+    write_single_cache_sheet(
+        LEADERBOARD_SNAPSHOT_CACHE_SHEET,
+        cache_key,
+        snapshot,
+        LEADERBOARD_DISPLAY_COLUMNS,
+    )
 
 
 def normalize_leaderboard_snapshot(snapshot: pd.DataFrame) -> pd.DataFrame:
@@ -4687,47 +4795,41 @@ def render_default_leaderboard(
         ),
         -1,
     )
-    participant_refs = leaderboard_participant_refs(users)
     checkpoint_lookup = {checkpoint["checkpoint_id"]: checkpoint for checkpoint in checkpoints}
     current_checkpoint = checkpoint_lookup[selected_checkpoint_id]
-    current_results = results_through_match(results, matches, str(current_checkpoint["through_match_id"]))
-    snapshot = cached_leaderboard_snapshot(
-        selected_checkpoint_id,
-        participant_refs,
-        current_results,
+    is_latest_checkpoint = selected_index == len(checkpoints) - 1
+    cache_key = current_leaderboard_cache_key(
+        users,
+        results,
         teams,
         matches,
         knockout_matchups,
         third_place_combinations,
-        awarded_group_standings=set(current_checkpoint["awarded_group_standings"]),
+        current_checkpoint,
     )
-    if snapshot is not None:
-        previous_ranks = {}
-        if selected_index > 0:
-            previous_checkpoint = checkpoints[selected_index - 1]
-            previous_results = results_through_match(
-                results,
-                matches,
-                str(previous_checkpoint["through_match_id"]),
-            )
-            previous = cached_leaderboard_snapshot(
-                str(previous_checkpoint["checkpoint_id"]),
-                participant_refs,
-                previous_results,
-                teams,
-                matches,
-                knockout_matchups,
-                third_place_combinations,
-                awarded_group_standings=set(previous_checkpoint["awarded_group_standings"]),
-            )
-            if previous is not None:
-                previous_ranks = dict(zip(previous["user_id"], previous["rank"]))
-        snapshot["rank_change"] = snapshot.apply(
-            lambda row: format_change(to_int(row["rank"]), previous_ranks.get(row["user_id"])),
-            axis=1,
+    if is_latest_checkpoint:
+        snapshot = read_current_leaderboard_cache(cache_key)
+        if snapshot is not None:
+            display_leaderboard_table(snapshot, include_change=True)
+            return
+
+    current_results = results_through_match(results, matches, str(current_checkpoint["through_match_id"]))
+    if not is_latest_checkpoint:
+        participant_refs = leaderboard_participant_refs(users)
+        snapshot = cached_leaderboard_snapshot(
+            selected_checkpoint_id,
+            participant_refs,
+            current_results,
+            teams,
+            matches,
+            knockout_matchups,
+            third_place_combinations,
+            awarded_group_standings=set(current_checkpoint["awarded_group_standings"]),
         )
-        display_leaderboard_table(snapshot, include_change=True)
-        return
+        if snapshot is not None:
+            snapshot["rank_change"] = "-"
+            display_leaderboard_table(snapshot, include_change=True)
+            return
 
     participants = leaderboard_participants(users, include_ai=False)
     snapshot = snapshot_with_checkpoint_rank_change(
@@ -4740,6 +4842,8 @@ def render_default_leaderboard(
         knockout_matchups,
         third_place_combinations,
     )
+    if is_latest_checkpoint:
+        write_current_leaderboard_cache(cache_key, snapshot)
     display_leaderboard_table(snapshot, include_change=True)
 
 
