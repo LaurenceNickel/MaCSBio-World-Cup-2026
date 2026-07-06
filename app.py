@@ -3907,6 +3907,31 @@ def current_leaderboard_cache_file(cache_key: str) -> Path:
     return LEADERBOARD_SNAPSHOTS_DIR / f"current_{cache_key}.csv"
 
 
+def latest_leaderboard_cache_key(
+    users: pd.DataFrame,
+    results: pd.DataFrame,
+    teams: pd.DataFrame,
+    matches: pd.DataFrame,
+    knockout_matchups: pd.DataFrame,
+    third_place_combinations: pd.DataFrame,
+) -> str:
+    user_signature = tuple(
+        (str(row["user_id"]), str(row["user_name"]))
+        for _, row in users[["user_id", "user_name"]].iterrows()
+    )
+    key_parts = {
+        "schema": "latest-leaderboard-display-v1",
+        "users": user_signature,
+        "results": dataframe_cache_key(results),
+        "teams": dataframe_cache_key(teams),
+        "matches": dataframe_cache_key(matches),
+        "knockout_matchups": dataframe_cache_key(knockout_matchups),
+        "third_place_combinations": dataframe_cache_key(third_place_combinations),
+    }
+    encoded = json.dumps(key_parts, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def normalize_leaderboard_display_snapshot(snapshot: pd.DataFrame) -> pd.DataFrame:
     for column in LEADERBOARD_DISPLAY_COLUMNS:
         if column not in snapshot.columns:
@@ -4765,6 +4790,19 @@ def render_default_leaderboard(
     knockout_matchups: pd.DataFrame,
     third_place_combinations: pd.DataFrame,
 ) -> None:
+    latest_cache_key = latest_leaderboard_cache_key(
+        users,
+        results,
+        teams,
+        matches,
+        knockout_matchups,
+        third_place_combinations,
+    )
+    latest_snapshot = read_current_leaderboard_cache(latest_cache_key)
+    if latest_snapshot is not None:
+        display_leaderboard_table(latest_snapshot, include_change=True)
+        return
+
     checkpoints = leaderboard_checkpoint_options(
         results,
         matches,
@@ -4844,6 +4882,7 @@ def render_default_leaderboard(
     )
     if is_latest_checkpoint:
         write_current_leaderboard_cache(cache_key, snapshot)
+        write_current_leaderboard_cache(latest_cache_key, snapshot)
     display_leaderboard_table(snapshot, include_change=True)
 
 
