@@ -2585,6 +2585,7 @@ def validate_sources(
     results: pd.DataFrame,
     knockout_matchups: pd.DataFrame,
     third_place_combinations: pd.DataFrame,
+    validate_predictions: bool = False,
 ) -> list[str]:
     errors: list[str] = []
 
@@ -2677,8 +2678,9 @@ def validate_sources(
     result_errors = validate_results_file(results, valid_match_ids)
     errors.extend(result_errors)
 
-    prediction_errors = validate_prediction_files(valid_user_ids, valid_match_ids)
-    errors.extend(prediction_errors)
+    if validate_predictions:
+        prediction_errors = validate_prediction_files(valid_user_ids, valid_match_ids)
+        errors.extend(prediction_errors)
 
     return errors
 
