@@ -1412,6 +1412,17 @@ def prediction_file(user_id: str) -> Path:
     return PREDICTIONS_DIR / f"predictions_{user_id}.csv"
 
 
+@st.cache_data
+def load_prediction_csv(path: Path, modified_time: float) -> pd.DataFrame:
+    if not path.exists():
+        return pd.DataFrame(columns=PREDICTION_COLUMNS)
+    predictions = pd.read_csv(path, dtype=str).fillna("")
+    for column in PREDICTION_COLUMNS:
+        if column not in predictions.columns:
+            predictions[column] = ""
+    return predictions[PREDICTION_COLUMNS].copy()
+
+
 def load_user_predictions(user_id: str) -> pd.DataFrame:
     if google_sheets_enabled():
         predictions = read_sheet(PREDICTIONS_SHEET, tuple(PREDICTION_COLUMNS))
@@ -1422,11 +1433,7 @@ def load_user_predictions(user_id: str) -> pd.DataFrame:
     path = prediction_file(user_id)
     if not path.exists():
         return pd.DataFrame(columns=PREDICTION_COLUMNS)
-    predictions = pd.read_csv(path, dtype=str).fillna("")
-    for column in PREDICTION_COLUMNS:
-        if column not in predictions.columns:
-            predictions[column] = ""
-    return predictions[PREDICTION_COLUMNS].copy()
+    return load_prediction_csv(path, path.stat().st_mtime)
 
 
 def save_user_predictions(user_id: str, predictions: pd.DataFrame) -> None:
@@ -3574,15 +3581,12 @@ def render_rules() -> None:
     )
 
 
-def load_ai_predictions() -> list[dict[str, Any]]:
+@st.cache_data
+def load_ai_predictions_from_files(file_signatures: tuple[tuple[str, float], ...]) -> list[dict[str, Any]]:
     participants = []
-    if not AI_PREDICTIONS_DIR.exists():
-        return participants
-    for path in sorted(AI_PREDICTIONS_DIR.glob("predictions_*.csv")):
-        predictions = pd.read_csv(path, dtype=str).fillna("")
-        for column in PREDICTION_COLUMNS:
-            if column not in predictions.columns:
-                predictions[column] = ""
+    for path_text, modified_time in file_signatures:
+        path = Path(path_text)
+        predictions = load_prediction_csv(path, modified_time)
         user_id = str(predictions["user_id"].iloc[0]).strip() if not predictions.empty else path.stem
         name = path.stem.replace("predictions_", "")
         participants.append(
@@ -3594,6 +3598,16 @@ def load_ai_predictions() -> list[dict[str, Any]]:
             }
         )
     return participants
+
+
+def load_ai_predictions() -> list[dict[str, Any]]:
+    if not AI_PREDICTIONS_DIR.exists():
+        return []
+    file_signatures = tuple(
+        (str(path), path.stat().st_mtime)
+        for path in sorted(AI_PREDICTIONS_DIR.glob("predictions_*.csv"))
+    )
+    return load_ai_predictions_from_files(file_signatures)
 
 
 def load_human_predictions(users: pd.DataFrame) -> list[dict[str, Any]]:
@@ -3652,6 +3666,7 @@ def leaderboard_snapshot(
     knockout_matchups: pd.DataFrame,
     third_place_combinations: pd.DataFrame,
     awarded_group_standings: set[str] | None = None,
+    precomputed_prediction_states: dict[str, dict[str, Any]] | None = None,
 ) -> pd.DataFrame:
     columns = [
         "rank",
@@ -3679,9 +3694,18 @@ def leaderboard_snapshot(
         require_confirmed_placements=True,
     )
     for participant in participants:
-        prediction_state = derive_tournament_state(
-            teams, matches, participant["predictions"], knockout_matchups, third_place_combinations, use_cards=False
+        prediction_state = (precomputed_prediction_states or {}).get(
+            str(participant["user_id"])
         )
+        if prediction_state is None:
+            prediction_state = derive_tournament_state(
+                teams,
+                matches,
+                participant["predictions"],
+                knockout_matchups,
+                third_place_combinations,
+                use_cards=False,
+            )
         breakdown = calculate_user_score_breakdown_from_states(
             participant["predictions"],
             prediction_state,
@@ -4328,6 +4352,10 @@ def group_match_predictability(
 ) -> pd.DataFrame:
     rows = []
     actual_rows = score_lookup(results)
+    participant_prediction_rows = {
+        participant["user_id"]: score_lookup(participant["predictions"])
+        for participant in participants
+    }
     for _, match in matches[matches["stage"] == GROUP_STAGE].iterrows():
         match_id = str(match["match_id"])
         actual = completed_score(actual_rows.get(match_id))
@@ -4337,7 +4365,7 @@ def group_match_predictability(
         total = 0
         correct = 0
         for participant in participants:
-            prediction = score_lookup(participant["predictions"]).get(match_id)
+            prediction = participant_prediction_rows[participant["user_id"]].get(match_id)
             predicted = completed_score(prediction)
             if predicted is None:
                 continue
@@ -5048,6 +5076,17 @@ def timeline_table(
     third_place_combinations: pd.DataFrame,
 ) -> pd.DataFrame:
     rows = []
+    prediction_states = {
+        str(participant["user_id"]): derive_tournament_state(
+            teams,
+            matches,
+            participant["predictions"],
+            knockout_matchups,
+            third_place_combinations,
+            use_cards=False,
+        )
+        for participant in participants
+    }
     for match_id in completed_match_ids(results, matches):
         scoped_results = results_through_match(results, matches, match_id)
         snapshot = leaderboard_snapshot(
@@ -5057,6 +5096,7 @@ def timeline_table(
             matches,
             knockout_matchups,
             third_place_combinations,
+            precomputed_prediction_states=prediction_states,
         )
         for _, row in snapshot.iterrows():
             rows.append(
