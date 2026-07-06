@@ -2572,20 +2572,20 @@ def update_leaderboard_file() -> pd.DataFrame:
     knockout_matchups = read_csv(KNOCKOUT_MATCHUPS_FILE)
     third_place_combinations = read_csv(THIRD_PLACE_COMBINATIONS_FILE)
 
-    rows = []
-    for _, user in users.iterrows():
-        predictions = load_user_predictions(user["user_id"])
-        points = calculate_user_points(
-            predictions, results, teams, matches, knockout_matchups, third_place_combinations
-        )
-        rows.append({"user_id": user["user_id"], "user_name": user["user_name"], "total_points": points})
-
-    leaderboard = pd.DataFrame(rows, columns=["user_id", "user_name", "total_points"])
-    if not leaderboard.empty:
-        leaderboard = leaderboard.sort_values(
-            by=["total_points", "user_name"], ascending=[False, True]
-        ).reset_index(drop=True)
-        leaderboard.insert(0, "rank", range(1, len(leaderboard) + 1))
+    participants = leaderboard_participants(users, include_ai=False)
+    snapshot = leaderboard_snapshot(
+        participants,
+        results,
+        teams,
+        matches,
+        knockout_matchups,
+        third_place_combinations,
+    )
+    leaderboard = (
+        snapshot[["rank", "user_id", "user_name", "total_points"]].copy()
+        if not snapshot.empty
+        else pd.DataFrame(columns=["rank", "user_id", "user_name", "total_points"])
+    )
 
     if google_sheets_enabled():
         write_sheet("leaderboard", leaderboard, ["rank", "user_id", "user_name", "total_points"])
@@ -4814,100 +4814,13 @@ def render_default_leaderboard(
     if display_cached_leaderboard_table(cached_leaderboard):
         return
 
-    latest_cache_key = latest_leaderboard_cache_key(
-        users,
-        results,
-        teams,
-        matches,
-        knockout_matchups,
-        third_place_combinations,
-    )
-    latest_snapshot = read_current_leaderboard_cache(latest_cache_key)
-    if latest_snapshot is not None:
-        display_leaderboard_table(latest_snapshot, include_change=True)
-        return
-
-    checkpoints = leaderboard_checkpoint_options(
-        results,
-        matches,
-        teams,
-        knockout_matchups,
-        third_place_combinations,
-    )
-    if not checkpoints:
-        st.info("The leaderboard will appear once the first match has been played.")
-        return
-    selected_checkpoint_id = checkpoints[-1]["checkpoint_id"]
-    labels = [checkpoint["label"] for checkpoint in checkpoints]
-    selected_index = len(checkpoints) - 1
-    selected_label = st.selectbox(
-        "Show leaderboard after",
-        labels,
-        index=selected_index,
-        key="leaderboard_after_match",
-    )
-    selected_checkpoint_id = {
-        checkpoint["label"]: checkpoint["checkpoint_id"] for checkpoint in checkpoints
-    }[selected_label]
-    selected_index = next(
-        (
-            index
-            for index, checkpoint in enumerate(checkpoints)
-            if checkpoint["checkpoint_id"] == selected_checkpoint_id
-        ),
-        -1,
-    )
-    checkpoint_lookup = {checkpoint["checkpoint_id"]: checkpoint for checkpoint in checkpoints}
-    current_checkpoint = checkpoint_lookup[selected_checkpoint_id]
-    is_latest_checkpoint = selected_index == len(checkpoints) - 1
-    cache_key = current_leaderboard_cache_key(
-        users,
-        results,
-        teams,
-        matches,
-        knockout_matchups,
-        third_place_combinations,
-        current_checkpoint,
-    )
-    if is_latest_checkpoint:
-        snapshot = read_current_leaderboard_cache(cache_key)
-        if snapshot is not None:
-            display_leaderboard_table(snapshot, include_change=True)
-            return
-
-    current_results = results_through_match(results, matches, str(current_checkpoint["through_match_id"]))
-    if not is_latest_checkpoint:
-        participant_refs = leaderboard_participant_refs(users)
-        snapshot = cached_leaderboard_snapshot(
-            selected_checkpoint_id,
-            participant_refs,
-            current_results,
-            teams,
-            matches,
-            knockout_matchups,
-            third_place_combinations,
-            awarded_group_standings=set(current_checkpoint["awarded_group_standings"]),
-        )
-        if snapshot is not None:
-            snapshot["rank_change"] = "-"
-            display_leaderboard_table(snapshot, include_change=True)
-            return
-
-    participants = leaderboard_participants(users, include_ai=False)
-    snapshot = snapshot_with_checkpoint_rank_change(
-        participants,
-        results,
-        matches,
-        selected_checkpoint_id,
-        checkpoints,
-        teams,
-        knockout_matchups,
-        third_place_combinations,
-    )
-    if is_latest_checkpoint:
-        write_current_leaderboard_cache(cache_key, snapshot)
-        write_current_leaderboard_cache(latest_cache_key, snapshot)
-    display_leaderboard_table(snapshot, include_change=True)
+    st.warning("The precomputed leaderboard is missing or empty.")
+    if st.button("Rebuild leaderboard", key="rebuild_leaderboard"):
+        with st.spinner("Rebuilding leaderboard..."):
+            leaderboard = update_leaderboard_file()
+        if display_cached_leaderboard_table(leaderboard):
+            st.rerun()
+        st.info("No submitted predictions are available yet.")
 
 
 def render_additional_rankings(
