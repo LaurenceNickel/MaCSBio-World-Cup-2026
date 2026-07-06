@@ -3892,7 +3892,15 @@ def persisted_leaderboard_snapshot(
             snapshot.to_csv(cache_file, index=False)
             return snapshot
     if cache_file.exists():
-        return normalize_leaderboard_snapshot(pd.read_csv(cache_file, dtype=str).fillna(""))
+        snapshot = normalize_leaderboard_snapshot(pd.read_csv(cache_file, dtype=str).fillna(""))
+        if use_sheet_cache:
+            write_tabular_cache_sheet(
+                LEADERBOARD_SNAPSHOT_CACHE_SHEET,
+                cache_key,
+                snapshot,
+                LEADERBOARD_SNAPSHOT_COLUMNS,
+            )
+        return snapshot
 
     snapshot = leaderboard_snapshot(
         participants,
@@ -5572,6 +5580,13 @@ def timeline_table(
         for column in ["Points", "Rank"]:
             if column in cached.columns:
                 cached[column] = pd.to_numeric(cached[column], errors="coerce").fillna(0).astype(int)
+        if google_sheets_enabled():
+            write_tabular_cache_sheet(
+                LEADERBOARD_TIMELINE_CACHE_SHEET,
+                cache_key,
+                cached,
+                LEADERBOARD_TIMELINE_COLUMNS,
+            )
         return cached
 
     rows = []
