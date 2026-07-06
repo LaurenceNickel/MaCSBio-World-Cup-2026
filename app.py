@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import base64
+import hashlib
 import html
 import json
 import re
@@ -28,6 +29,7 @@ PREDICTIONS_DIR = DATA_DIR / "predictions"
 AI_PREDICTIONS_DIR = DATA_DIR / "ai_predictions"
 STANDINGS_DIR = DATA_DIR / "standings"
 DRAFTS_DIR = DATA_DIR / "drafts"
+LEADERBOARD_SNAPSHOTS_DIR = DATA_DIR / "leaderboard_snapshots"
 
 TEAMS_FILE = DATA_DIR / "teams.csv"
 MATCHES_FILE = DATA_DIR / "matches.csv"
@@ -922,6 +924,7 @@ def ensure_data_files() -> None:
     PREDICTIONS_DIR.mkdir(exist_ok=True)
     STANDINGS_DIR.mkdir(exist_ok=True)
     DRAFTS_DIR.mkdir(exist_ok=True)
+    LEADERBOARD_SNAPSHOTS_DIR.mkdir(exist_ok=True)
 
     if not USERS_FILE.exists():
         pd.DataFrame(columns=USERS_COLUMNS).to_csv(USERS_FILE, index=False)
@@ -3641,6 +3644,35 @@ def leaderboard_participants(users: pd.DataFrame, include_ai: bool) -> list[dict
     return participants
 
 
+LEADERBOARD_SNAPSHOT_COLUMNS = [
+    "rank",
+    "user_id",
+    "user_name",
+    "is_ai",
+    "total_points",
+    "match_score_points",
+    "group_standings_points",
+    "knockout_progression_points",
+    "correct_winners",
+    "exact_home_goals",
+    "exact_away_goals",
+    "exact_goal_components",
+    "exact_scores",
+]
+LEADERBOARD_SNAPSHOT_NUMERIC_COLUMNS = [
+    "rank",
+    "total_points",
+    "match_score_points",
+    "group_standings_points",
+    "knockout_progression_points",
+    "correct_winners",
+    "exact_home_goals",
+    "exact_away_goals",
+    "exact_goal_components",
+    "exact_scores",
+]
+
+
 def add_rank(table: pd.DataFrame, points_column: str = "total_points") -> pd.DataFrame:
     if table.empty:
         return table
@@ -3668,21 +3700,6 @@ def leaderboard_snapshot(
     awarded_group_standings: set[str] | None = None,
     precomputed_prediction_states: dict[str, dict[str, Any]] | None = None,
 ) -> pd.DataFrame:
-    columns = [
-        "rank",
-        "user_id",
-        "user_name",
-        "is_ai",
-        "total_points",
-        "match_score_points",
-        "group_standings_points",
-        "knockout_progression_points",
-        "correct_winners",
-        "exact_home_goals",
-        "exact_away_goals",
-        "exact_goal_components",
-        "exact_scores",
-    ]
     rows = []
     actual_state = derive_tournament_state(
         teams,
@@ -3724,8 +3741,101 @@ def leaderboard_snapshot(
             }
         )
     if not rows:
-        return pd.DataFrame(columns=columns)
+        return pd.DataFrame(columns=LEADERBOARD_SNAPSHOT_COLUMNS)
     return add_rank(pd.DataFrame(rows), "total_points")
+
+
+def leaderboard_snapshot_cache_key(
+    checkpoint_id: str,
+    participants: list[dict[str, Any]],
+    results: pd.DataFrame,
+    teams: pd.DataFrame,
+    matches: pd.DataFrame,
+    knockout_matchups: pd.DataFrame,
+    third_place_combinations: pd.DataFrame,
+    awarded_group_standings: set[str] | None = None,
+) -> str:
+    participant_signatures = tuple(
+        (
+            str(participant["user_id"]),
+            str(participant["user_name"]),
+            bool(participant["is_ai"]),
+            dataframe_cache_key(participant["predictions"]),
+        )
+        for participant in participants
+    )
+    key_parts = {
+        "schema": "leaderboard-snapshot-v2",
+        "checkpoint_id": checkpoint_id,
+        "participants": participant_signatures,
+        "results": dataframe_cache_key(results),
+        "teams": dataframe_cache_key(teams),
+        "matches": dataframe_cache_key(matches),
+        "knockout_matchups": dataframe_cache_key(knockout_matchups),
+        "third_place_combinations": dataframe_cache_key(third_place_combinations),
+        "awarded_group_standings": tuple(sorted(awarded_group_standings or set())),
+    }
+    encoded = json.dumps(key_parts, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def leaderboard_snapshot_cache_file(cache_key: str) -> Path:
+    return LEADERBOARD_SNAPSHOTS_DIR / f"{cache_key}.csv"
+
+
+def normalize_leaderboard_snapshot(snapshot: pd.DataFrame) -> pd.DataFrame:
+    for column in LEADERBOARD_SNAPSHOT_COLUMNS:
+        if column not in snapshot.columns:
+            snapshot[column] = False if column == "is_ai" else ""
+    for column in LEADERBOARD_SNAPSHOT_NUMERIC_COLUMNS:
+        snapshot[column] = pd.to_numeric(snapshot[column], errors="coerce").fillna(0).astype(int)
+    snapshot["is_ai"] = snapshot["is_ai"].map(
+        lambda value: str(value).strip().lower() in {"1", "true", "yes"}
+    )
+    ordered_columns = [column for column in LEADERBOARD_SNAPSHOT_COLUMNS if column in snapshot.columns]
+    extra_columns = [column for column in snapshot.columns if column not in ordered_columns]
+    return snapshot[ordered_columns + extra_columns]
+
+
+def persisted_leaderboard_snapshot(
+    checkpoint_id: str,
+    participants: list[dict[str, Any]],
+    results: pd.DataFrame,
+    teams: pd.DataFrame,
+    matches: pd.DataFrame,
+    knockout_matchups: pd.DataFrame,
+    third_place_combinations: pd.DataFrame,
+    awarded_group_standings: set[str] | None = None,
+    precomputed_prediction_states: dict[str, dict[str, Any]] | None = None,
+) -> pd.DataFrame:
+    ensure_data_files()
+    cache_key = leaderboard_snapshot_cache_key(
+        checkpoint_id,
+        participants,
+        results,
+        teams,
+        matches,
+        knockout_matchups,
+        third_place_combinations,
+        awarded_group_standings,
+    )
+    cache_file = leaderboard_snapshot_cache_file(cache_key)
+    if cache_file.exists():
+        return normalize_leaderboard_snapshot(pd.read_csv(cache_file, dtype=str).fillna(""))
+
+    snapshot = leaderboard_snapshot(
+        participants,
+        results,
+        teams,
+        matches,
+        knockout_matchups,
+        third_place_combinations,
+        awarded_group_standings=awarded_group_standings,
+        precomputed_prediction_states=precomputed_prediction_states,
+    )
+    snapshot = normalize_leaderboard_snapshot(snapshot)
+    snapshot.to_csv(cache_file, index=False)
+    return snapshot
 
 
 def completed_match_options(results: pd.DataFrame, matches: pd.DataFrame, teams: pd.DataFrame) -> list[tuple[str, str]]:
@@ -3845,16 +3955,28 @@ def snapshot_with_rank_change(
     third_place_combinations: pd.DataFrame,
 ) -> pd.DataFrame:
     current_results = results_through_match(results, matches, selected_match_id)
-    current = leaderboard_snapshot(
-        participants, current_results, teams, matches, knockout_matchups, third_place_combinations
+    current = persisted_leaderboard_snapshot(
+        f"match:{selected_match_id}",
+        participants,
+        current_results,
+        teams,
+        matches,
+        knockout_matchups,
+        third_place_combinations,
     )
     match_ids = completed_match_ids(results, matches)
     selected_index = match_ids.index(selected_match_id) if selected_match_id in match_ids else -1
     previous_ranks = {}
     if selected_index > 0:
         previous_results = results_through_match(results, matches, match_ids[selected_index - 1])
-        previous = leaderboard_snapshot(
-            participants, previous_results, teams, matches, knockout_matchups, third_place_combinations
+        previous = persisted_leaderboard_snapshot(
+            f"match:{match_ids[selected_index - 1]}",
+            participants,
+            previous_results,
+            teams,
+            matches,
+            knockout_matchups,
+            third_place_combinations,
         )
         previous_ranks = dict(zip(previous["user_id"], previous["rank"]))
     current["rank_change"] = current.apply(
@@ -3878,7 +4000,8 @@ def snapshot_with_checkpoint_rank_change(
     current_results = results_through_match(
         results, matches, str(current_checkpoint["through_match_id"])
     )
-    current = leaderboard_snapshot(
+    current = persisted_leaderboard_snapshot(
+        selected_checkpoint_id,
         participants,
         current_results,
         teams,
@@ -3901,7 +4024,8 @@ def snapshot_with_checkpoint_rank_change(
         previous_results = results_through_match(
             results, matches, str(previous_checkpoint["through_match_id"])
         )
-        previous = leaderboard_snapshot(
+        previous = persisted_leaderboard_snapshot(
+            str(previous_checkpoint["checkpoint_id"]),
             participants,
             previous_results,
             teams,
@@ -4282,7 +4406,15 @@ def render_additional_rankings(
 ) -> None:
     participants = leaderboard_participants(users, include_ai=False)
     scoped_results = results_for_stage(results, matches, GROUP_STAGE)
-    snapshot = leaderboard_snapshot(participants, scoped_results, teams, matches, knockout_matchups, third_place_combinations)
+    snapshot = persisted_leaderboard_snapshot(
+        "group_stage:additional_rankings",
+        participants,
+        scoped_results,
+        teams,
+        matches,
+        knockout_matchups,
+        third_place_combinations,
+    )
     if snapshot.empty:
         st.info("Additional rankings will appear once participants have submitted predictions.")
         return
@@ -5076,20 +5208,42 @@ def timeline_table(
     third_place_combinations: pd.DataFrame,
 ) -> pd.DataFrame:
     rows = []
-    prediction_states = {
-        str(participant["user_id"]): derive_tournament_state(
-            teams,
-            matches,
-            participant["predictions"],
-            knockout_matchups,
-            third_place_combinations,
-            use_cards=False,
-        )
-        for participant in participants
+    ensure_data_files()
+    completed_ids = completed_match_ids(results, matches)
+    scoped_results_by_match = {
+        match_id: results_through_match(results, matches, match_id)
+        for match_id in completed_ids
     }
-    for match_id in completed_match_ids(results, matches):
-        scoped_results = results_through_match(results, matches, match_id)
-        snapshot = leaderboard_snapshot(
+    has_missing_snapshot = any(
+        not leaderboard_snapshot_cache_file(
+            leaderboard_snapshot_cache_key(
+                f"timeline:{match_id}",
+                participants,
+                scoped_results,
+                teams,
+                matches,
+                knockout_matchups,
+                third_place_combinations,
+            )
+        ).exists()
+        for match_id, scoped_results in scoped_results_by_match.items()
+    )
+    prediction_states = {}
+    if has_missing_snapshot:
+        prediction_states = {
+            str(participant["user_id"]): derive_tournament_state(
+                teams,
+                matches,
+                participant["predictions"],
+                knockout_matchups,
+                third_place_combinations,
+                use_cards=False,
+            )
+            for participant in participants
+        }
+    for match_id, scoped_results in scoped_results_by_match.items():
+        snapshot = persisted_leaderboard_snapshot(
+            f"timeline:{match_id}",
             participants,
             scoped_results,
             teams,
@@ -5129,7 +5283,8 @@ def leaderboard_default_human_names(
         return human_names[: min(rank_limit, len(human_names))]
 
     scoped_results = results_through_match(results, matches, completed_ids[-1])
-    snapshot = leaderboard_snapshot(
+    snapshot = persisted_leaderboard_snapshot(
+        f"default_humans:{completed_ids[-1]}",
         humans,
         scoped_results,
         teams,
@@ -5234,9 +5389,19 @@ def render_human_vs_ai(
     participants = leaderboard_participants(users, include_ai=True)
     match_ids = completed_match_ids(results, matches)
     scoped_results = results_through_match(results, matches, match_ids[-1] if match_ids else None)
-    snapshot = leaderboard_snapshot(participants, scoped_results, teams, matches, knockout_matchups, third_place_combinations)
+    current_checkpoint = f"human_vs_ai:{match_ids[-1]}" if match_ids else "human_vs_ai:none"
+    snapshot = persisted_leaderboard_snapshot(
+        current_checkpoint,
+        participants,
+        scoped_results,
+        teams,
+        matches,
+        knockout_matchups,
+        third_place_combinations,
+    )
     group_stage_results = results_for_stage(results, matches, GROUP_STAGE)
-    group_stage_snapshot = leaderboard_snapshot(
+    group_stage_snapshot = persisted_leaderboard_snapshot(
+        "human_vs_ai:group_stage",
         participants,
         group_stage_results,
         teams,
