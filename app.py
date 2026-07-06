@@ -3842,12 +3842,7 @@ def normalize_leaderboard_snapshot(snapshot: pd.DataFrame) -> pd.DataFrame:
 
 
 def should_share_leaderboard_snapshot_cache(checkpoint_id: str) -> bool:
-    return (
-        checkpoint_id == "group_stage:additional_rankings"
-        or checkpoint_id == "human_vs_ai:group_stage"
-        or checkpoint_id.startswith("default_humans:")
-        or checkpoint_id.startswith("human_vs_ai:")
-    )
+    return bool(checkpoint_id)
 
 
 def persisted_leaderboard_snapshot(
@@ -3873,9 +3868,8 @@ def persisted_leaderboard_snapshot(
         awarded_group_standings,
     )
     cache_file = leaderboard_snapshot_cache_file(cache_key)
-    if cache_file.exists():
-        return normalize_leaderboard_snapshot(pd.read_csv(cache_file, dtype=str).fillna(""))
-    if should_share_leaderboard_snapshot_cache(checkpoint_id):
+    use_sheet_cache = google_sheets_enabled() and should_share_leaderboard_snapshot_cache(checkpoint_id)
+    if use_sheet_cache:
         cached_sheet = read_tabular_cache_sheet(
             LEADERBOARD_SNAPSHOT_CACHE_SHEET,
             cache_key,
@@ -3885,6 +3879,8 @@ def persisted_leaderboard_snapshot(
             snapshot = normalize_leaderboard_snapshot(cached_sheet)
             snapshot.to_csv(cache_file, index=False)
             return snapshot
+    if cache_file.exists():
+        return normalize_leaderboard_snapshot(pd.read_csv(cache_file, dtype=str).fillna(""))
 
     snapshot = leaderboard_snapshot(
         participants,
@@ -3898,7 +3894,7 @@ def persisted_leaderboard_snapshot(
     )
     snapshot = normalize_leaderboard_snapshot(snapshot)
     snapshot.to_csv(cache_file, index=False)
-    if should_share_leaderboard_snapshot_cache(checkpoint_id):
+    if use_sheet_cache:
         write_tabular_cache_sheet(
             LEADERBOARD_SNAPSHOT_CACHE_SHEET,
             cache_key,
@@ -5461,23 +5457,24 @@ def timeline_table(
         third_place_combinations,
     )
     cache_file = leaderboard_timeline_cache_file(cache_key)
+    if google_sheets_enabled():
+        cached_sheet = read_tabular_cache_sheet(
+            LEADERBOARD_TIMELINE_CACHE_SHEET,
+            cache_key,
+            LEADERBOARD_TIMELINE_COLUMNS,
+        )
+        if cached_sheet is not None:
+            for column in ["Points", "Rank"]:
+                if column in cached_sheet.columns:
+                    cached_sheet[column] = pd.to_numeric(cached_sheet[column], errors="coerce").fillna(0).astype(int)
+            cached_sheet.to_csv(cache_file, index=False)
+            return cached_sheet
     if cache_file.exists():
         cached = pd.read_csv(cache_file, dtype={"Match": str}).fillna("")
         for column in ["Points", "Rank"]:
             if column in cached.columns:
                 cached[column] = pd.to_numeric(cached[column], errors="coerce").fillna(0).astype(int)
         return cached
-    cached_sheet = read_tabular_cache_sheet(
-        LEADERBOARD_TIMELINE_CACHE_SHEET,
-        cache_key,
-        LEADERBOARD_TIMELINE_COLUMNS,
-    )
-    if cached_sheet is not None:
-        for column in ["Points", "Rank"]:
-            if column in cached_sheet.columns:
-                cached_sheet[column] = pd.to_numeric(cached_sheet[column], errors="coerce").fillna(0).astype(int)
-        cached_sheet.to_csv(cache_file, index=False)
-        return cached_sheet
 
     rows = []
     completed_ids = completed_match_ids(results, matches)
