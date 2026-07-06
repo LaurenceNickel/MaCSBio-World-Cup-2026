@@ -4555,6 +4555,26 @@ def display_leaderboard_table(snapshot: pd.DataFrame, include_change: bool = Tru
     render_centered_dataframe(display, bold_columns={"Total points"}, row_classes=row_classes)
 
 
+def display_cached_leaderboard_table(leaderboard: pd.DataFrame) -> bool:
+    if leaderboard.empty:
+        return False
+    required = {"rank", "user_name", "total_points"}
+    if not required.issubset(set(leaderboard.columns)):
+        return False
+    display = leaderboard[["rank", "user_name", "total_points"]].copy()
+    display["rank"] = pd.to_numeric(display["rank"], errors="coerce").fillna(0).astype(int)
+    display["total_points"] = pd.to_numeric(display["total_points"], errors="coerce").fillna(0).astype(int)
+    display = display.rename(
+        columns={
+            "rank": "Rank",
+            "user_name": "User name",
+            "total_points": "Total points",
+        }
+    )
+    render_centered_dataframe(display, bold_columns={"Total points"})
+    return True
+
+
 def prediction_score_text(row: dict[str, Any] | pd.Series | None) -> str:
     score = completed_score(row)
     if score is None:
@@ -4790,6 +4810,10 @@ def render_default_leaderboard(
     knockout_matchups: pd.DataFrame,
     third_place_combinations: pd.DataFrame,
 ) -> None:
+    cached_leaderboard = read_csv(LEADERBOARD_FILE)
+    if display_cached_leaderboard_table(cached_leaderboard):
+        return
+
     latest_cache_key = latest_leaderboard_cache_key(
         users,
         results,
