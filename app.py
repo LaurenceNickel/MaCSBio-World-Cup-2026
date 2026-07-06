@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import ast
 import base64
-import hashlib
 import html
 import json
 import re
@@ -29,7 +28,6 @@ PREDICTIONS_DIR = DATA_DIR / "predictions"
 AI_PREDICTIONS_DIR = DATA_DIR / "ai_predictions"
 STANDINGS_DIR = DATA_DIR / "standings"
 DRAFTS_DIR = DATA_DIR / "drafts"
-LEADERBOARD_SNAPSHOTS_DIR = DATA_DIR / "leaderboard_snapshots"
 
 TEAMS_FILE = DATA_DIR / "teams.csv"
 MATCHES_FILE = DATA_DIR / "matches.csv"
@@ -48,8 +46,6 @@ SHEET_BACKED_FILES = {
 CONFIG_SHEET = "config"
 DRAFTS_SHEET = "drafts"
 PREDICTIONS_SHEET = "predictions"
-LEADERBOARD_SNAPSHOT_CACHE_SHEET = "leaderboard_snapshot_cache"
-LEADERBOARD_TIMELINE_CACHE_SHEET = "leaderboard_timeline_cache"
 
 
 class GoogleSheetsRateLimitError(RuntimeError):
@@ -926,7 +922,6 @@ def ensure_data_files() -> None:
     PREDICTIONS_DIR.mkdir(exist_ok=True)
     STANDINGS_DIR.mkdir(exist_ok=True)
     DRAFTS_DIR.mkdir(exist_ok=True)
-    LEADERBOARD_SNAPSHOTS_DIR.mkdir(exist_ok=True)
 
     if not USERS_FILE.exists():
         pd.DataFrame(columns=USERS_COLUMNS).to_csv(USERS_FILE, index=False)
@@ -1069,79 +1064,6 @@ def write_sheet(name: str, table: pd.DataFrame, columns: list[str] | None = None
         raise_if_google_sheets_rate_limited(error)
         raise
     clear_cache()
-
-
-def read_tabular_cache_sheet(
-    sheet_name: str,
-    cache_key: str,
-    value_columns: list[str],
-) -> pd.DataFrame | None:
-    if not google_sheets_enabled():
-        return None
-    columns = ["cache_key", *value_columns]
-    cache = read_sheet(sheet_name, tuple(columns))
-    if cache.empty:
-        return None
-    matching = cache[cache["cache_key"].astype(str).eq(str(cache_key))]
-    if matching.empty:
-        return None
-    return matching[value_columns].reset_index(drop=True)
-
-
-def write_tabular_cache_sheet(
-    sheet_name: str,
-    cache_key: str,
-    table: pd.DataFrame,
-    value_columns: list[str],
-) -> None:
-    if not google_sheets_enabled():
-        return
-    columns = ["cache_key", *value_columns]
-    existing = read_sheet_fresh(sheet_name, tuple(columns))
-    if not existing.empty:
-        existing = existing[~existing["cache_key"].astype(str).eq(str(cache_key))]
-    cache_rows = table.copy().fillna("")
-    for column in value_columns:
-        if column not in cache_rows.columns:
-            cache_rows[column] = ""
-    cache_rows = cache_rows[value_columns]
-    cache_rows.insert(0, "cache_key", cache_key)
-    updated = pd.concat([existing, cache_rows], ignore_index=True)
-    write_sheet(sheet_name, updated, columns)
-
-
-def read_single_cache_sheet(
-    sheet_name: str,
-    cache_key: str,
-    value_columns: list[str],
-) -> pd.DataFrame | None:
-    if not google_sheets_enabled():
-        return None
-    columns = ["cache_key", *value_columns]
-    cache = read_sheet(sheet_name, tuple(columns))
-    if cache.empty or "cache_key" not in cache.columns:
-        return None
-    if not cache["cache_key"].astype(str).eq(str(cache_key)).all():
-        return None
-    return cache[value_columns].reset_index(drop=True)
-
-
-def write_single_cache_sheet(
-    sheet_name: str,
-    cache_key: str,
-    table: pd.DataFrame,
-    value_columns: list[str],
-) -> None:
-    if not google_sheets_enabled():
-        return
-    columns = ["cache_key", *value_columns]
-    cache_rows = table.copy().fillna("")
-    for column in value_columns:
-        if column not in cache_rows.columns:
-            cache_rows[column] = ""
-    cache_rows = cache_rows[value_columns]
-    cache_rows.insert(0, "cache_key", cache_key)
-    write_sheet(sheet_name, cache_rows, columns)
 
 
 def sheet_columns_for_path(path: Path) -> tuple[str, ...]:
@@ -3721,19 +3643,6 @@ def leaderboard_participants(users: pd.DataFrame, include_ai: bool) -> list[dict
     return participants
 
 
-def leaderboard_participant_refs(users: pd.DataFrame) -> list[dict[str, Any]]:
-    empty_predictions = pd.DataFrame(columns=PREDICTION_COLUMNS)
-    return [
-        {
-            "user_id": str(user["user_id"]),
-            "user_name": user["user_name"],
-            "is_ai": False,
-            "predictions": empty_predictions,
-        }
-        for _, user in users.iterrows()
-    ]
-
-
 LEADERBOARD_SNAPSHOT_COLUMNS = [
     "rank",
     "user_id",
@@ -3749,22 +3658,6 @@ LEADERBOARD_SNAPSHOT_COLUMNS = [
     "exact_goal_components",
     "exact_scores",
 ]
-LEADERBOARD_SNAPSHOT_NUMERIC_COLUMNS = [
-    "rank",
-    "total_points",
-    "match_score_points",
-    "group_standings_points",
-    "knockout_progression_points",
-    "correct_winners",
-    "exact_home_goals",
-    "exact_away_goals",
-    "exact_goal_components",
-    "exact_scores",
-]
-LEADERBOARD_DISPLAY_COLUMNS = [*LEADERBOARD_SNAPSHOT_COLUMNS, "rank_change"]
-LEADERBOARD_TIMELINE_COLUMNS = ["Match", "User name", "Participant type", "Points", "Rank"]
-
-
 def add_rank(table: pd.DataFrame, points_column: str = "total_points") -> pd.DataFrame:
     if table.empty:
         return table
@@ -3835,437 +3728,6 @@ def leaderboard_snapshot(
     if not rows:
         return pd.DataFrame(columns=LEADERBOARD_SNAPSHOT_COLUMNS)
     return add_rank(pd.DataFrame(rows), "total_points")
-
-
-def leaderboard_snapshot_cache_key(
-    checkpoint_id: str,
-    participants: list[dict[str, Any]],
-    results: pd.DataFrame,
-    teams: pd.DataFrame,
-    matches: pd.DataFrame,
-    knockout_matchups: pd.DataFrame,
-    third_place_combinations: pd.DataFrame,
-    awarded_group_standings: set[str] | None = None,
-) -> str:
-    participant_signatures = tuple(
-        (
-            str(participant["user_id"]),
-            str(participant["user_name"]),
-            bool(participant["is_ai"]),
-        )
-        for participant in participants
-    )
-    key_parts = {
-        "schema": "leaderboard-snapshot-v3",
-        "checkpoint_id": checkpoint_id,
-        "participants": participant_signatures,
-        "results": dataframe_cache_key(results),
-        "teams": dataframe_cache_key(teams),
-        "matches": dataframe_cache_key(matches),
-        "knockout_matchups": dataframe_cache_key(knockout_matchups),
-        "third_place_combinations": dataframe_cache_key(third_place_combinations),
-        "awarded_group_standings": tuple(sorted(awarded_group_standings or set())),
-    }
-    encoded = json.dumps(key_parts, sort_keys=True, default=str).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
-
-
-def leaderboard_snapshot_cache_file(cache_key: str) -> Path:
-    return LEADERBOARD_SNAPSHOTS_DIR / f"{cache_key}.csv"
-
-
-def current_leaderboard_cache_key(
-    users: pd.DataFrame,
-    results: pd.DataFrame,
-    teams: pd.DataFrame,
-    matches: pd.DataFrame,
-    knockout_matchups: pd.DataFrame,
-    third_place_combinations: pd.DataFrame,
-    selected_checkpoint: dict[str, Any],
-) -> str:
-    user_signature = tuple(
-        (str(row["user_id"]), str(row["user_name"]))
-        for _, row in users[["user_id", "user_name"]].iterrows()
-    )
-    key_parts = {
-        "schema": "current-leaderboard-display-v1",
-        "users": user_signature,
-        "results": dataframe_cache_key(results),
-        "teams": dataframe_cache_key(teams),
-        "matches": dataframe_cache_key(matches),
-        "knockout_matchups": dataframe_cache_key(knockout_matchups),
-        "third_place_combinations": dataframe_cache_key(third_place_combinations),
-        "checkpoint_id": str(selected_checkpoint["checkpoint_id"]),
-        "through_match_id": str(selected_checkpoint["through_match_id"]),
-        "awarded_group_standings": tuple(sorted(selected_checkpoint["awarded_group_standings"])),
-    }
-    encoded = json.dumps(key_parts, sort_keys=True, default=str).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
-
-
-def current_leaderboard_cache_file(cache_key: str) -> Path:
-    return LEADERBOARD_SNAPSHOTS_DIR / f"current_{cache_key}.csv"
-
-
-def latest_leaderboard_cache_key(
-    users: pd.DataFrame,
-    results: pd.DataFrame,
-    teams: pd.DataFrame,
-    matches: pd.DataFrame,
-    knockout_matchups: pd.DataFrame,
-    third_place_combinations: pd.DataFrame,
-) -> str:
-    user_signature = tuple(
-        (str(row["user_id"]), str(row["user_name"]))
-        for _, row in users[["user_id", "user_name"]].iterrows()
-    )
-    key_parts = {
-        "schema": "latest-leaderboard-display-v1",
-        "users": user_signature,
-        "results": dataframe_cache_key(results),
-        "teams": dataframe_cache_key(teams),
-        "matches": dataframe_cache_key(matches),
-        "knockout_matchups": dataframe_cache_key(knockout_matchups),
-        "third_place_combinations": dataframe_cache_key(third_place_combinations),
-    }
-    encoded = json.dumps(key_parts, sort_keys=True, default=str).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
-
-
-def normalize_leaderboard_display_snapshot(snapshot: pd.DataFrame) -> pd.DataFrame:
-    for column in LEADERBOARD_DISPLAY_COLUMNS:
-        if column not in snapshot.columns:
-            snapshot[column] = "-" if column == "rank_change" else ""
-    snapshot = normalize_leaderboard_snapshot(snapshot)
-    if "rank_change" not in snapshot.columns:
-        snapshot["rank_change"] = "-"
-    return snapshot[LEADERBOARD_DISPLAY_COLUMNS]
-
-
-def read_current_leaderboard_cache(cache_key: str) -> pd.DataFrame | None:
-    cache_file = current_leaderboard_cache_file(cache_key)
-    if google_sheets_enabled():
-        cached_sheet = read_single_cache_sheet(
-            LEADERBOARD_SNAPSHOT_CACHE_SHEET,
-            cache_key,
-            LEADERBOARD_DISPLAY_COLUMNS,
-        )
-        if cached_sheet is not None:
-            snapshot = normalize_leaderboard_display_snapshot(cached_sheet)
-            LEADERBOARD_SNAPSHOTS_DIR.mkdir(exist_ok=True)
-            snapshot.to_csv(cache_file, index=False)
-            return snapshot
-    if cache_file.exists():
-        return normalize_leaderboard_display_snapshot(pd.read_csv(cache_file, dtype=str).fillna(""))
-    return None
-
-
-def write_current_leaderboard_cache(cache_key: str, snapshot: pd.DataFrame) -> None:
-    LEADERBOARD_SNAPSHOTS_DIR.mkdir(exist_ok=True)
-    snapshot = normalize_leaderboard_display_snapshot(snapshot)
-    snapshot.to_csv(current_leaderboard_cache_file(cache_key), index=False)
-    write_single_cache_sheet(
-        LEADERBOARD_SNAPSHOT_CACHE_SHEET,
-        cache_key,
-        snapshot,
-        LEADERBOARD_DISPLAY_COLUMNS,
-    )
-
-
-def normalize_leaderboard_snapshot(snapshot: pd.DataFrame) -> pd.DataFrame:
-    for column in LEADERBOARD_SNAPSHOT_COLUMNS:
-        if column not in snapshot.columns:
-            snapshot[column] = False if column == "is_ai" else ""
-    for column in LEADERBOARD_SNAPSHOT_NUMERIC_COLUMNS:
-        snapshot[column] = pd.to_numeric(snapshot[column], errors="coerce").fillna(0).astype(int)
-    snapshot["is_ai"] = snapshot["is_ai"].map(
-        lambda value: str(value).strip().lower() in {"1", "true", "yes"}
-    )
-    ordered_columns = [column for column in LEADERBOARD_SNAPSHOT_COLUMNS if column in snapshot.columns]
-    extra_columns = [column for column in snapshot.columns if column not in ordered_columns]
-    return snapshot[ordered_columns + extra_columns]
-
-
-def should_share_leaderboard_snapshot_cache(checkpoint_id: str) -> bool:
-    return bool(checkpoint_id)
-
-
-def persisted_leaderboard_snapshot(
-    checkpoint_id: str,
-    participants: list[dict[str, Any]],
-    results: pd.DataFrame,
-    teams: pd.DataFrame,
-    matches: pd.DataFrame,
-    knockout_matchups: pd.DataFrame,
-    third_place_combinations: pd.DataFrame,
-    awarded_group_standings: set[str] | None = None,
-    precomputed_prediction_states: dict[str, dict[str, Any]] | None = None,
-) -> pd.DataFrame:
-    LEADERBOARD_SNAPSHOTS_DIR.mkdir(exist_ok=True)
-    cache_key = leaderboard_snapshot_cache_key(
-        checkpoint_id,
-        participants,
-        results,
-        teams,
-        matches,
-        knockout_matchups,
-        third_place_combinations,
-        awarded_group_standings,
-    )
-    cache_file = leaderboard_snapshot_cache_file(cache_key)
-    use_sheet_cache = google_sheets_enabled() and should_share_leaderboard_snapshot_cache(checkpoint_id)
-    if use_sheet_cache:
-        cached_sheet = read_tabular_cache_sheet(
-            LEADERBOARD_SNAPSHOT_CACHE_SHEET,
-            cache_key,
-            LEADERBOARD_SNAPSHOT_COLUMNS,
-        )
-        if cached_sheet is not None:
-            snapshot = normalize_leaderboard_snapshot(cached_sheet)
-            snapshot.to_csv(cache_file, index=False)
-            return snapshot
-    if cache_file.exists():
-        snapshot = normalize_leaderboard_snapshot(pd.read_csv(cache_file, dtype=str).fillna(""))
-        if use_sheet_cache:
-            write_tabular_cache_sheet(
-                LEADERBOARD_SNAPSHOT_CACHE_SHEET,
-                cache_key,
-                snapshot,
-                LEADERBOARD_SNAPSHOT_COLUMNS,
-            )
-        return snapshot
-
-    snapshot = leaderboard_snapshot(
-        participants,
-        results,
-        teams,
-        matches,
-        knockout_matchups,
-        third_place_combinations,
-        awarded_group_standings=awarded_group_standings,
-        precomputed_prediction_states=precomputed_prediction_states,
-    )
-    snapshot = normalize_leaderboard_snapshot(snapshot)
-    snapshot.to_csv(cache_file, index=False)
-    if use_sheet_cache:
-        write_tabular_cache_sheet(
-            LEADERBOARD_SNAPSHOT_CACHE_SHEET,
-            cache_key,
-            snapshot,
-            LEADERBOARD_SNAPSHOT_COLUMNS,
-        )
-    return snapshot
-
-
-def cached_leaderboard_snapshot(
-    checkpoint_id: str,
-    participants: list[dict[str, Any]],
-    results: pd.DataFrame,
-    teams: pd.DataFrame,
-    matches: pd.DataFrame,
-    knockout_matchups: pd.DataFrame,
-    third_place_combinations: pd.DataFrame,
-    awarded_group_standings: set[str] | None = None,
-) -> pd.DataFrame | None:
-    cache_key = leaderboard_snapshot_cache_key(
-        checkpoint_id,
-        participants,
-        results,
-        teams,
-        matches,
-        knockout_matchups,
-        third_place_combinations,
-        awarded_group_standings,
-    )
-    cache_file = leaderboard_snapshot_cache_file(cache_key)
-    if google_sheets_enabled():
-        cached_sheet = read_tabular_cache_sheet(
-            LEADERBOARD_SNAPSHOT_CACHE_SHEET,
-            cache_key,
-            LEADERBOARD_SNAPSHOT_COLUMNS,
-        )
-        if cached_sheet is not None:
-            snapshot = normalize_leaderboard_snapshot(cached_sheet)
-            LEADERBOARD_SNAPSHOTS_DIR.mkdir(exist_ok=True)
-            snapshot.to_csv(cache_file, index=False)
-            return snapshot
-    if cache_file.exists():
-        return normalize_leaderboard_snapshot(pd.read_csv(cache_file, dtype=str).fillna(""))
-    return None
-
-
-def participant_cache_signatures(participants: list[dict[str, Any]]) -> tuple[Any, ...]:
-    return tuple(
-        (
-            str(participant["user_id"]),
-            str(participant["user_name"]),
-            bool(participant["is_ai"]),
-        )
-        for participant in participants
-    )
-
-
-def leaderboard_timeline_cache_key(
-    participants: list[dict[str, Any]],
-    results: pd.DataFrame,
-    teams: pd.DataFrame,
-    matches: pd.DataFrame,
-    knockout_matchups: pd.DataFrame,
-    third_place_combinations: pd.DataFrame,
-) -> str:
-    key_parts = {
-        "schema": "leaderboard-timeline-v2",
-        "participants": participant_cache_signatures(participants),
-        "results": dataframe_cache_key(results),
-        "teams": dataframe_cache_key(teams),
-        "matches": dataframe_cache_key(matches),
-        "knockout_matchups": dataframe_cache_key(knockout_matchups),
-        "third_place_combinations": dataframe_cache_key(third_place_combinations),
-    }
-    encoded = json.dumps(key_parts, sort_keys=True, default=str).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
-
-
-def leaderboard_timeline_cache_file(cache_key: str) -> Path:
-    return LEADERBOARD_SNAPSHOTS_DIR / f"timeline_{cache_key}.csv"
-
-
-def leaderboard_cache_manifest_file() -> Path:
-    return LEADERBOARD_SNAPSHOTS_DIR / "manifest.json"
-
-
-def leaderboard_warm_cache_key(
-    humans: list[dict[str, Any]],
-    ais: list[dict[str, Any]],
-    results: pd.DataFrame,
-    teams: pd.DataFrame,
-    matches: pd.DataFrame,
-    knockout_matchups: pd.DataFrame,
-    third_place_combinations: pd.DataFrame,
-) -> str:
-    key_parts = {
-        "schema": "leaderboard-warm-v2",
-        "humans": participant_cache_signatures(humans),
-        "ais": participant_cache_signatures(ais),
-        "results": dataframe_cache_key(results),
-        "teams": dataframe_cache_key(teams),
-        "matches": dataframe_cache_key(matches),
-        "knockout_matchups": dataframe_cache_key(knockout_matchups),
-        "third_place_combinations": dataframe_cache_key(third_place_combinations),
-    }
-    encoded = json.dumps(key_parts, sort_keys=True, default=str).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
-
-
-def leaderboard_cache_is_warm(cache_key: str) -> bool:
-    path = leaderboard_cache_manifest_file()
-    if not path.exists():
-        return False
-    try:
-        manifest = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return False
-    return manifest.get("cache_key") == cache_key
-
-
-def write_leaderboard_cache_manifest(cache_key: str) -> None:
-    LEADERBOARD_SNAPSHOTS_DIR.mkdir(exist_ok=True)
-    leaderboard_cache_manifest_file().write_text(
-        json.dumps({"cache_key": cache_key, "created_at": time.time()}, indent=2),
-        encoding="utf-8",
-    )
-
-
-def warm_leaderboard_caches(
-    users: pd.DataFrame,
-    results: pd.DataFrame,
-    teams: pd.DataFrame,
-    matches: pd.DataFrame,
-    knockout_matchups: pd.DataFrame,
-    third_place_combinations: pd.DataFrame,
-) -> None:
-    LEADERBOARD_SNAPSHOTS_DIR.mkdir(exist_ok=True)
-    humans = leaderboard_participants(users, include_ai=False)
-    ais = load_ai_predictions()
-    cache_key = leaderboard_warm_cache_key(
-        humans,
-        ais,
-        results,
-        teams,
-        matches,
-        knockout_matchups,
-        third_place_combinations,
-    )
-    if leaderboard_cache_is_warm(cache_key):
-        return
-
-    completed_ids = completed_match_ids(results, matches)
-    group_stage_results = results_for_stage(results, matches, GROUP_STAGE)
-    persisted_leaderboard_snapshot(
-        "group_stage:additional_rankings",
-        humans,
-        group_stage_results,
-        teams,
-        matches,
-        knockout_matchups,
-        third_place_combinations,
-    )
-    if completed_ids:
-        checkpoints = leaderboard_checkpoint_options(
-            results,
-            matches,
-            teams,
-            knockout_matchups,
-            third_place_combinations,
-        )
-        if checkpoints:
-            latest_checkpoint = checkpoints[-1]
-            latest_checkpoint_results = results_through_match(
-                results,
-                matches,
-                str(latest_checkpoint["through_match_id"]),
-            )
-            persisted_leaderboard_snapshot(
-                str(latest_checkpoint["checkpoint_id"]),
-                humans,
-                latest_checkpoint_results,
-                teams,
-                matches,
-                knockout_matchups,
-                third_place_combinations,
-                awarded_group_standings=set(latest_checkpoint["awarded_group_standings"]),
-            )
-        latest_results = results_through_match(results, matches, completed_ids[-1])
-        persisted_leaderboard_snapshot(
-            f"default_humans:{completed_ids[-1]}",
-            humans,
-            latest_results,
-            teams,
-            matches,
-            knockout_matchups,
-            third_place_combinations,
-        )
-        all_participants = [*humans, *ais]
-        persisted_leaderboard_snapshot(
-            f"human_vs_ai:{completed_ids[-1]}",
-            all_participants,
-            latest_results,
-            teams,
-            matches,
-            knockout_matchups,
-            third_place_combinations,
-        )
-        persisted_leaderboard_snapshot(
-            "human_vs_ai:group_stage",
-            all_participants,
-            group_stage_results,
-            teams,
-            matches,
-            knockout_matchups,
-            third_place_combinations,
-        )
-
-    write_leaderboard_cache_manifest(cache_key)
 
 
 def completed_match_options(results: pd.DataFrame, matches: pd.DataFrame, teams: pd.DataFrame) -> list[tuple[str, str]]:
@@ -4385,8 +3847,7 @@ def snapshot_with_rank_change(
     third_place_combinations: pd.DataFrame,
 ) -> pd.DataFrame:
     current_results = results_through_match(results, matches, selected_match_id)
-    current = persisted_leaderboard_snapshot(
-        f"match:{selected_match_id}",
+    current = leaderboard_snapshot(
         participants,
         current_results,
         teams,
@@ -4399,8 +3860,7 @@ def snapshot_with_rank_change(
     previous_ranks = {}
     if selected_index > 0:
         previous_results = results_through_match(results, matches, match_ids[selected_index - 1])
-        previous = persisted_leaderboard_snapshot(
-            f"match:{match_ids[selected_index - 1]}",
+        previous = leaderboard_snapshot(
             participants,
             previous_results,
             teams,
@@ -4430,8 +3890,7 @@ def snapshot_with_checkpoint_rank_change(
     current_results = results_through_match(
         results, matches, str(current_checkpoint["through_match_id"])
     )
-    current = persisted_leaderboard_snapshot(
-        selected_checkpoint_id,
+    current = leaderboard_snapshot(
         participants,
         current_results,
         teams,
@@ -4454,8 +3913,7 @@ def snapshot_with_checkpoint_rank_change(
         previous_results = results_through_match(
             results, matches, str(previous_checkpoint["through_match_id"])
         )
-        previous = persisted_leaderboard_snapshot(
-            str(previous_checkpoint["checkpoint_id"]),
+        previous = leaderboard_snapshot(
             participants,
             previous_results,
             teams,
@@ -4553,26 +4011,6 @@ def display_leaderboard_table(snapshot: pd.DataFrame, include_change: bool = Tru
     display = snapshot[selected_columns].rename(columns=columns)
     row_classes = ["ai-row" if bool(value) else "" for value in snapshot.get("is_ai", [])] if highlight_ai else None
     render_centered_dataframe(display, bold_columns={"Total points"}, row_classes=row_classes)
-
-
-def display_cached_leaderboard_table(leaderboard: pd.DataFrame) -> bool:
-    if leaderboard.empty:
-        return False
-    required = {"rank", "user_name", "total_points"}
-    if not required.issubset(set(leaderboard.columns)):
-        return False
-    display = leaderboard[["rank", "user_name", "total_points"]].copy()
-    display["rank"] = pd.to_numeric(display["rank"], errors="coerce").fillna(0).astype(int)
-    display["total_points"] = pd.to_numeric(display["total_points"], errors="coerce").fillna(0).astype(int)
-    display = display.rename(
-        columns={
-            "rank": "Rank",
-            "user_name": "User name",
-            "total_points": "Total points",
-        }
-    )
-    render_centered_dataframe(display, bold_columns={"Total points"})
-    return True
 
 
 def prediction_score_text(row: dict[str, Any] | pd.Series | None) -> str:
@@ -4810,17 +4248,38 @@ def render_default_leaderboard(
     knockout_matchups: pd.DataFrame,
     third_place_combinations: pd.DataFrame,
 ) -> None:
-    cached_leaderboard = read_csv(LEADERBOARD_FILE)
-    if display_cached_leaderboard_table(cached_leaderboard):
+    checkpoints = leaderboard_checkpoint_options(
+        results,
+        matches,
+        teams,
+        knockout_matchups,
+        third_place_combinations,
+    )
+    if not checkpoints:
+        st.info("The leaderboard will appear once the first match has been played.")
         return
-
-    st.warning("The precomputed leaderboard is missing or empty.")
-    if st.button("Rebuild leaderboard", key="rebuild_leaderboard"):
-        with st.spinner("Rebuilding leaderboard..."):
-            leaderboard = update_leaderboard_file()
-        if display_cached_leaderboard_table(leaderboard):
-            st.rerun()
-        st.info("No submitted predictions are available yet.")
+    labels = [checkpoint["label"] for checkpoint in checkpoints]
+    selected_label = st.selectbox(
+        "Show leaderboard after",
+        labels,
+        index=len(checkpoints) - 1,
+        key="leaderboard_after_match",
+    )
+    selected_checkpoint_id = {
+        checkpoint["label"]: checkpoint["checkpoint_id"] for checkpoint in checkpoints
+    }[selected_label]
+    participants = leaderboard_participants(users, include_ai=False)
+    snapshot = snapshot_with_checkpoint_rank_change(
+        participants,
+        results,
+        matches,
+        selected_checkpoint_id,
+        checkpoints,
+        teams,
+        knockout_matchups,
+        third_place_combinations,
+    )
+    display_leaderboard_table(snapshot, include_change=True)
 
 
 def render_additional_rankings(
@@ -4833,8 +4292,7 @@ def render_additional_rankings(
 ) -> None:
     participants = leaderboard_participants(users, include_ai=False)
     scoped_results = results_for_stage(results, matches, GROUP_STAGE)
-    snapshot = persisted_leaderboard_snapshot(
-        "group_stage:additional_rankings",
+    snapshot = leaderboard_snapshot(
         participants,
         scoped_results,
         teams,
@@ -5633,42 +5091,6 @@ def timeline_table(
     knockout_matchups: pd.DataFrame,
     third_place_combinations: pd.DataFrame,
 ) -> pd.DataFrame:
-    LEADERBOARD_SNAPSHOTS_DIR.mkdir(exist_ok=True)
-    cache_key = leaderboard_timeline_cache_key(
-        participants,
-        results,
-        teams,
-        matches,
-        knockout_matchups,
-        third_place_combinations,
-    )
-    cache_file = leaderboard_timeline_cache_file(cache_key)
-    if google_sheets_enabled():
-        cached_sheet = read_tabular_cache_sheet(
-            LEADERBOARD_TIMELINE_CACHE_SHEET,
-            cache_key,
-            LEADERBOARD_TIMELINE_COLUMNS,
-        )
-        if cached_sheet is not None:
-            for column in ["Points", "Rank"]:
-                if column in cached_sheet.columns:
-                    cached_sheet[column] = pd.to_numeric(cached_sheet[column], errors="coerce").fillna(0).astype(int)
-            cached_sheet.to_csv(cache_file, index=False)
-            return cached_sheet
-    if cache_file.exists():
-        cached = pd.read_csv(cache_file, dtype={"Match": str}).fillna("")
-        for column in ["Points", "Rank"]:
-            if column in cached.columns:
-                cached[column] = pd.to_numeric(cached[column], errors="coerce").fillna(0).astype(int)
-        if google_sheets_enabled():
-            write_tabular_cache_sheet(
-                LEADERBOARD_TIMELINE_CACHE_SHEET,
-                cache_key,
-                cached,
-                LEADERBOARD_TIMELINE_COLUMNS,
-            )
-        return cached
-
     rows = []
     completed_ids = completed_match_ids(results, matches)
     prediction_states = {
@@ -5703,15 +5125,7 @@ def timeline_table(
                     "Rank": row["rank"],
                 }
             )
-    timeline = pd.DataFrame(rows)
-    timeline.to_csv(cache_file, index=False)
-    write_tabular_cache_sheet(
-        LEADERBOARD_TIMELINE_CACHE_SHEET,
-        cache_key,
-        timeline,
-        LEADERBOARD_TIMELINE_COLUMNS,
-    )
-    return timeline
+    return pd.DataFrame(rows)
 
 
 def leaderboard_default_human_names(
@@ -5732,8 +5146,7 @@ def leaderboard_default_human_names(
         return human_names[: min(rank_limit, len(human_names))]
 
     scoped_results = results_through_match(results, matches, completed_ids[-1])
-    snapshot = persisted_leaderboard_snapshot(
-        f"default_humans:{completed_ids[-1]}",
+    snapshot = leaderboard_snapshot(
         humans,
         scoped_results,
         teams,
@@ -5835,9 +5248,7 @@ def render_human_vs_ai(
     participants = leaderboard_participants(users, include_ai=True)
     match_ids = completed_match_ids(results, matches)
     scoped_results = results_through_match(results, matches, match_ids[-1] if match_ids else None)
-    current_checkpoint = f"human_vs_ai:{match_ids[-1]}" if match_ids else "human_vs_ai:none"
-    snapshot = persisted_leaderboard_snapshot(
-        current_checkpoint,
+    snapshot = leaderboard_snapshot(
         participants,
         scoped_results,
         teams,
@@ -5846,8 +5257,7 @@ def render_human_vs_ai(
         third_place_combinations,
     )
     group_stage_results = results_for_stage(results, matches, GROUP_STAGE)
-    group_stage_snapshot = persisted_leaderboard_snapshot(
-        "human_vs_ai:group_stage",
+    group_stage_snapshot = leaderboard_snapshot(
         participants,
         group_stage_results,
         teams,
