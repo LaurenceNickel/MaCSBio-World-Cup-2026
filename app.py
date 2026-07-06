@@ -4529,9 +4529,11 @@ def knockout_winner_first_result_text(row: dict[str, Any] | pd.Series | None, te
 def knockout_team_progress_status(
     team_id: str,
     actual_round_rows: pd.DataFrame,
+    actual_resolved_matches: pd.DataFrame,
     entrants_locked: bool,
     qualification_statuses: dict[str, str] | None = None,
 ) -> str:
+    team_id = str(team_id)
     for _, row in actual_round_rows.iterrows():
         home_id = str(row.get("home_team", "")).strip()
         away_id = str(row.get("away_team", "")).strip()
@@ -4542,6 +4544,10 @@ def knockout_team_progress_status(
             if not winner_id:
                 return "pending"
             return "advanced" if winner_id == team_id else "eliminated"
+    knockout_rows = actual_resolved_matches[actual_resolved_matches["stage"].isin(KNOCKOUT_STAGES)]
+    for _, row in knockout_rows.iterrows():
+        if str(row.get("loser", "")).strip() == team_id:
+            return "eliminated"
     group_status = (qualification_statuses or {}).get(str(team_id), "")
     if group_status == "eliminated":
         return "eliminated"
@@ -4552,6 +4558,7 @@ def predicted_team_progress_html(
     team_ids: list[str],
     teams: pd.DataFrame,
     actual_round_rows: pd.DataFrame,
+    actual_resolved_matches: pd.DataFrame,
     entrants_locked: bool,
     qualification_statuses: dict[str, str] | None = None,
 ) -> str:
@@ -4563,6 +4570,7 @@ def predicted_team_progress_html(
         status = knockout_team_progress_status(
             team_id,
             actual_round_rows,
+            actual_resolved_matches,
             entrants_locked,
             qualification_statuses,
         )
@@ -4707,6 +4715,7 @@ def render_knockout_progression_scores(
                     predicted_winners,
                     teams,
                     actual_round_rows,
+                    actual_state["resolved_matches"],
                     entrants_locked,
                     qualification_statuses,
                 ),
