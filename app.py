@@ -3799,7 +3799,7 @@ def normalize_leaderboard_cache_rows(rows: pd.DataFrame) -> pd.DataFrame:
 def read_leaderboard_cache(cache_key: str) -> pd.DataFrame | None:
     if not google_sheets_enabled():
         return None
-    cache = read_sheet(LEADERBOARD_CACHE_SHEET, tuple(LEADERBOARD_CACHE_COLUMNS))
+    cache = read_sheet_fresh(LEADERBOARD_CACHE_SHEET, tuple(LEADERBOARD_CACHE_COLUMNS))
     if cache.empty or "cache_key" not in cache.columns:
         return None
     matching = cache[cache["cache_key"].astype(str).eq(str(cache_key))].copy()
@@ -3809,9 +3809,11 @@ def read_leaderboard_cache(cache_key: str) -> pd.DataFrame | None:
     return rows[["rank_change", *LEADERBOARD_SNAPSHOT_COLUMNS]].reset_index(drop=True)
 
 
-def write_leaderboard_cache(cache_key: str, checkpoint_id: str, snapshot: pd.DataFrame) -> None:
+def write_leaderboard_cache(cache_key: str, checkpoint_id: str, snapshot: pd.DataFrame) -> str:
     if not google_sheets_enabled():
-        return
+        return "disabled"
+    if snapshot.empty:
+        return "empty"
     existing = read_sheet_fresh(LEADERBOARD_CACHE_SHEET, tuple(LEADERBOARD_CACHE_COLUMNS))
     if not existing.empty and "cache_key" in existing.columns:
         existing = existing[~existing["cache_key"].astype(str).eq(str(cache_key))]
@@ -3824,6 +3826,7 @@ def write_leaderboard_cache(cache_key: str, checkpoint_id: str, snapshot: pd.Dat
     cache_rows.insert(0, "cache_key", cache_key)
     updated = pd.concat([existing, cache_rows], ignore_index=True)
     write_sheet(LEADERBOARD_CACHE_SHEET, updated, LEADERBOARD_CACHE_COLUMNS)
+    return f"written:{len(cache_rows)}"
 
 
 def compute_checkpoint_snapshot(
@@ -4433,6 +4436,7 @@ def render_default_leaderboard(
         checkpoint,
     )
     snapshot = read_leaderboard_cache(cache_key)
+    cache_status = "hit" if snapshot is not None else "miss"
     if snapshot is None:
         participants = leaderboard_participants(users, include_ai=False)
         previous_checkpoint = checkpoints[selected_index - 1] if selected_index > 0 else None
@@ -4447,8 +4451,20 @@ def render_default_leaderboard(
                 knockout_matchups,
                 third_place_combinations,
             )
-        write_leaderboard_cache(cache_key, str(checkpoint["checkpoint_id"]), snapshot)
+        cache_status = write_leaderboard_cache(cache_key, str(checkpoint["checkpoint_id"]), snapshot)
     display_leaderboard_table(snapshot, include_change=True)
+    if cache_status == "hit":
+        st.caption(f"Loaded from Google Sheets cache sheet `{LEADERBOARD_CACHE_SHEET}`.")
+    elif cache_status.startswith("written:"):
+        row_count = cache_status.split(":", 1)[1]
+        st.caption(f"Saved {row_count} rows to Google Sheets cache sheet `{LEADERBOARD_CACHE_SHEET}`.")
+    elif cache_status == "disabled":
+        st.warning(
+            "Leaderboard cache was not written because `GOOGLE_SHEETS_BACKEND` is not enabled "
+            "for this running app."
+        )
+    elif cache_status == "empty":
+        st.info("Leaderboard cache was not written because the computed snapshot was empty.")
 
 
 def render_additional_rankings(
