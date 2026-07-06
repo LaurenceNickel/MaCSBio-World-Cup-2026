@@ -3808,7 +3808,7 @@ def persisted_leaderboard_snapshot(
     awarded_group_standings: set[str] | None = None,
     precomputed_prediction_states: dict[str, dict[str, Any]] | None = None,
 ) -> pd.DataFrame:
-    ensure_data_files()
+    LEADERBOARD_SNAPSHOTS_DIR.mkdir(exist_ok=True)
     cache_key = leaderboard_snapshot_cache_key(
         checkpoint_id,
         participants,
@@ -3836,6 +3836,43 @@ def persisted_leaderboard_snapshot(
     snapshot = normalize_leaderboard_snapshot(snapshot)
     snapshot.to_csv(cache_file, index=False)
     return snapshot
+
+
+def participant_cache_signatures(participants: list[dict[str, Any]]) -> tuple[Any, ...]:
+    return tuple(
+        (
+            str(participant["user_id"]),
+            str(participant["user_name"]),
+            bool(participant["is_ai"]),
+            dataframe_cache_key(participant["predictions"]),
+        )
+        for participant in participants
+    )
+
+
+def leaderboard_timeline_cache_key(
+    participants: list[dict[str, Any]],
+    results: pd.DataFrame,
+    teams: pd.DataFrame,
+    matches: pd.DataFrame,
+    knockout_matchups: pd.DataFrame,
+    third_place_combinations: pd.DataFrame,
+) -> str:
+    key_parts = {
+        "schema": "leaderboard-timeline-v1",
+        "participants": participant_cache_signatures(participants),
+        "results": dataframe_cache_key(results),
+        "teams": dataframe_cache_key(teams),
+        "matches": dataframe_cache_key(matches),
+        "knockout_matchups": dataframe_cache_key(knockout_matchups),
+        "third_place_combinations": dataframe_cache_key(third_place_combinations),
+    }
+    encoded = json.dumps(key_parts, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def leaderboard_timeline_cache_file(cache_key: str) -> Path:
+    return LEADERBOARD_SNAPSHOTS_DIR / f"timeline_{cache_key}.csv"
 
 
 def completed_match_options(results: pd.DataFrame, matches: pd.DataFrame, teams: pd.DataFrame) -> list[tuple[str, str]]:
@@ -5198,7 +5235,6 @@ def render_per_user_scores(
     )
 
 
-@st.cache_data(show_spinner=False, hash_funcs={pd.DataFrame: dataframe_cache_key})
 def timeline_table(
     participants: list[dict[str, Any]],
     results: pd.DataFrame,
@@ -5207,43 +5243,40 @@ def timeline_table(
     knockout_matchups: pd.DataFrame,
     third_place_combinations: pd.DataFrame,
 ) -> pd.DataFrame:
-    rows = []
-    ensure_data_files()
-    completed_ids = completed_match_ids(results, matches)
-    scoped_results_by_match = {
-        match_id: results_through_match(results, matches, match_id)
-        for match_id in completed_ids
-    }
-    has_missing_snapshot = any(
-        not leaderboard_snapshot_cache_file(
-            leaderboard_snapshot_cache_key(
-                f"timeline:{match_id}",
-                participants,
-                scoped_results,
-                teams,
-                matches,
-                knockout_matchups,
-                third_place_combinations,
-            )
-        ).exists()
-        for match_id, scoped_results in scoped_results_by_match.items()
+    LEADERBOARD_SNAPSHOTS_DIR.mkdir(exist_ok=True)
+    cache_file = leaderboard_timeline_cache_file(
+        leaderboard_timeline_cache_key(
+            participants,
+            results,
+            teams,
+            matches,
+            knockout_matchups,
+            third_place_combinations,
+        )
     )
-    prediction_states = {}
-    if has_missing_snapshot:
-        prediction_states = {
-            str(participant["user_id"]): derive_tournament_state(
-                teams,
-                matches,
-                participant["predictions"],
-                knockout_matchups,
-                third_place_combinations,
-                use_cards=False,
-            )
-            for participant in participants
-        }
-    for match_id, scoped_results in scoped_results_by_match.items():
-        snapshot = persisted_leaderboard_snapshot(
-            f"timeline:{match_id}",
+    if cache_file.exists():
+        cached = pd.read_csv(cache_file, dtype={"Match": str}).fillna("")
+        for column in ["Points", "Rank"]:
+            if column in cached.columns:
+                cached[column] = pd.to_numeric(cached[column], errors="coerce").fillna(0).astype(int)
+        return cached
+
+    rows = []
+    completed_ids = completed_match_ids(results, matches)
+    prediction_states = {
+        str(participant["user_id"]): derive_tournament_state(
+            teams,
+            matches,
+            participant["predictions"],
+            knockout_matchups,
+            third_place_combinations,
+            use_cards=False,
+        )
+        for participant in participants
+    }
+    for match_id in completed_ids:
+        scoped_results = results_through_match(results, matches, match_id)
+        snapshot = leaderboard_snapshot(
             participants,
             scoped_results,
             teams,
@@ -5262,7 +5295,9 @@ def timeline_table(
                     "Rank": row["rank"],
                 }
             )
-    return pd.DataFrame(rows)
+    timeline = pd.DataFrame(rows)
+    timeline.to_csv(cache_file, index=False)
+    return timeline
 
 
 def leaderboard_default_human_names(
