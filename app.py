@@ -951,6 +951,18 @@ def google_sheet_id() -> str:
     return value
 
 
+def google_sheets_target_label() -> str:
+    if not google_sheets_enabled():
+        return "Google Sheets disabled"
+    sheet_id = google_sheet_id()
+    sheet_hint = f"...{sheet_id[-8:]}" if sheet_id else "missing GOOGLE_SHEET_ID"
+    try:
+        title = str(getattr(sheets_workbook(), "title", "")).strip()
+    except Exception:
+        title = ""
+    return f"{title} ({sheet_hint})" if title else sheet_hint
+
+
 def is_google_sheets_rate_limit_error(error: Exception) -> bool:
     response = getattr(error, "response", None)
     status_code = getattr(response, "status_code", None)
@@ -3814,19 +3826,31 @@ def write_leaderboard_cache(cache_key: str, checkpoint_id: str, snapshot: pd.Dat
         return "disabled"
     if snapshot.empty:
         return "empty"
-    existing = read_sheet_fresh(LEADERBOARD_CACHE_SHEET, tuple(LEADERBOARD_CACHE_COLUMNS))
-    if not existing.empty and "cache_key" in existing.columns:
-        existing = existing[~existing["cache_key"].astype(str).eq(str(cache_key))]
-    cache_rows = snapshot.copy().fillna("")
-    for column in ["rank_change", *LEADERBOARD_SNAPSHOT_COLUMNS]:
-        if column not in cache_rows.columns:
-            cache_rows[column] = "-" if column == "rank_change" else ""
-    cache_rows = cache_rows[["rank_change", *LEADERBOARD_SNAPSHOT_COLUMNS]]
-    cache_rows.insert(0, "checkpoint_id", checkpoint_id)
-    cache_rows.insert(0, "cache_key", cache_key)
-    updated = pd.concat([existing, cache_rows], ignore_index=True)
-    write_sheet(LEADERBOARD_CACHE_SHEET, updated, LEADERBOARD_CACHE_COLUMNS)
-    return f"written:{len(cache_rows)}"
+    try:
+        existing = read_sheet_fresh(LEADERBOARD_CACHE_SHEET, tuple(LEADERBOARD_CACHE_COLUMNS))
+        if not existing.empty and "cache_key" in existing.columns:
+            existing = existing[~existing["cache_key"].astype(str).eq(str(cache_key))]
+        cache_rows = snapshot.copy().fillna("")
+        for column in ["rank_change", *LEADERBOARD_SNAPSHOT_COLUMNS]:
+            if column not in cache_rows.columns:
+                cache_rows[column] = "-" if column == "rank_change" else ""
+        cache_rows = cache_rows[["rank_change", *LEADERBOARD_SNAPSHOT_COLUMNS]]
+        cache_rows.insert(0, "checkpoint_id", checkpoint_id)
+        cache_rows.insert(0, "cache_key", cache_key)
+        updated = pd.concat([existing, cache_rows], ignore_index=True)
+        write_sheet(LEADERBOARD_CACHE_SHEET, updated, LEADERBOARD_CACHE_COLUMNS)
+        confirmed = read_sheet_fresh(LEADERBOARD_CACHE_SHEET, tuple(LEADERBOARD_CACHE_COLUMNS))
+    except GoogleSheetsRateLimitError:
+        raise
+    except Exception as error:
+        return f"error:{type(error).__name__}: {error}"
+    if (
+        not confirmed.empty
+        and "cache_key" in confirmed.columns
+        and confirmed["cache_key"].astype(str).eq(str(cache_key)).any()
+    ):
+        return f"verified:{len(cache_rows)}"
+    return "not_visible"
 
 
 def compute_checkpoint_snapshot(
@@ -4453,11 +4477,17 @@ def render_default_leaderboard(
             )
         cache_status = write_leaderboard_cache(cache_key, str(checkpoint["checkpoint_id"]), snapshot)
     display_leaderboard_table(snapshot, include_change=True)
+    cache_target = google_sheets_target_label()
     if cache_status == "hit":
-        st.caption(f"Loaded from Google Sheets cache sheet `{LEADERBOARD_CACHE_SHEET}`.")
-    elif cache_status.startswith("written:"):
+        st.caption(
+            f"Loaded from Google Sheets cache sheet `{LEADERBOARD_CACHE_SHEET}` in {cache_target}."
+        )
+    elif cache_status.startswith("verified:"):
         row_count = cache_status.split(":", 1)[1]
-        st.caption(f"Saved {row_count} rows to Google Sheets cache sheet `{LEADERBOARD_CACHE_SHEET}`.")
+        st.caption(
+            f"Saved and verified {row_count} rows in Google Sheets cache sheet "
+            f"`{LEADERBOARD_CACHE_SHEET}` in {cache_target}."
+        )
     elif cache_status == "disabled":
         st.warning(
             "Leaderboard cache was not written because `GOOGLE_SHEETS_BACKEND` is not enabled "
@@ -4465,6 +4495,13 @@ def render_default_leaderboard(
         )
     elif cache_status == "empty":
         st.info("Leaderboard cache was not written because the computed snapshot was empty.")
+    elif cache_status == "not_visible":
+        st.error(
+            f"The cache write call completed, but `{LEADERBOARD_CACHE_SHEET}` in {cache_target} "
+            "did not contain the written cache key on immediate read-back."
+        )
+    elif cache_status.startswith("error:"):
+        st.error(f"Leaderboard cache write failed for {cache_target}: {cache_status.removeprefix('error:')}")
 
 
 def render_additional_rankings(
