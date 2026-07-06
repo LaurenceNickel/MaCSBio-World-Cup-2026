@@ -5858,15 +5858,6 @@ def render_leaderboard(
     third_place_combinations: pd.DataFrame,
 ) -> None:
     st.header("Leaderboard")
-    with st.spinner("Updating leaderboard cache..."):
-        warm_leaderboard_caches(
-            users,
-            results,
-            teams,
-            matches,
-            knockout_matchups,
-            third_place_combinations,
-        )
     sections = [
         "Leaderboard",
         "Additional Rankings",
