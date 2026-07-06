@@ -48,6 +48,8 @@ SHEET_BACKED_FILES = {
 CONFIG_SHEET = "config"
 DRAFTS_SHEET = "drafts"
 PREDICTIONS_SHEET = "predictions"
+LEADERBOARD_SNAPSHOT_CACHE_SHEET = "leaderboard_snapshot_cache"
+LEADERBOARD_TIMELINE_CACHE_SHEET = "leaderboard_timeline_cache"
 
 
 class GoogleSheetsRateLimitError(RuntimeError):
@@ -1067,6 +1069,45 @@ def write_sheet(name: str, table: pd.DataFrame, columns: list[str] | None = None
         raise_if_google_sheets_rate_limited(error)
         raise
     clear_cache()
+
+
+def read_tabular_cache_sheet(
+    sheet_name: str,
+    cache_key: str,
+    value_columns: list[str],
+) -> pd.DataFrame | None:
+    if not google_sheets_enabled():
+        return None
+    columns = ["cache_key", *value_columns]
+    cache = read_sheet(sheet_name, tuple(columns))
+    if cache.empty:
+        return None
+    matching = cache[cache["cache_key"].astype(str).eq(str(cache_key))]
+    if matching.empty:
+        return None
+    return matching[value_columns].reset_index(drop=True)
+
+
+def write_tabular_cache_sheet(
+    sheet_name: str,
+    cache_key: str,
+    table: pd.DataFrame,
+    value_columns: list[str],
+) -> None:
+    if not google_sheets_enabled():
+        return
+    columns = ["cache_key", *value_columns]
+    existing = read_sheet_fresh(sheet_name, tuple(columns))
+    if not existing.empty:
+        existing = existing[~existing["cache_key"].astype(str).eq(str(cache_key))]
+    cache_rows = table.copy().fillna("")
+    for column in value_columns:
+        if column not in cache_rows.columns:
+            cache_rows[column] = ""
+    cache_rows = cache_rows[value_columns]
+    cache_rows.insert(0, "cache_key", cache_key)
+    updated = pd.concat([existing, cache_rows], ignore_index=True)
+    write_sheet(sheet_name, updated, columns)
 
 
 def sheet_columns_for_path(path: Path) -> tuple[str, ...]:
@@ -3671,6 +3712,7 @@ LEADERBOARD_SNAPSHOT_NUMERIC_COLUMNS = [
     "exact_goal_components",
     "exact_scores",
 ]
+LEADERBOARD_TIMELINE_COLUMNS = ["Match", "User name", "Participant type", "Points", "Rank"]
 
 
 def add_rank(table: pd.DataFrame, points_column: str = "total_points") -> pd.DataFrame:
@@ -3797,6 +3839,15 @@ def normalize_leaderboard_snapshot(snapshot: pd.DataFrame) -> pd.DataFrame:
     return snapshot[ordered_columns + extra_columns]
 
 
+def should_share_leaderboard_snapshot_cache(checkpoint_id: str) -> bool:
+    return (
+        checkpoint_id == "group_stage:additional_rankings"
+        or checkpoint_id == "human_vs_ai:group_stage"
+        or checkpoint_id.startswith("default_humans:")
+        or checkpoint_id.startswith("human_vs_ai:")
+    )
+
+
 def persisted_leaderboard_snapshot(
     checkpoint_id: str,
     participants: list[dict[str, Any]],
@@ -3822,6 +3873,16 @@ def persisted_leaderboard_snapshot(
     cache_file = leaderboard_snapshot_cache_file(cache_key)
     if cache_file.exists():
         return normalize_leaderboard_snapshot(pd.read_csv(cache_file, dtype=str).fillna(""))
+    if should_share_leaderboard_snapshot_cache(checkpoint_id):
+        cached_sheet = read_tabular_cache_sheet(
+            LEADERBOARD_SNAPSHOT_CACHE_SHEET,
+            cache_key,
+            LEADERBOARD_SNAPSHOT_COLUMNS,
+        )
+        if cached_sheet is not None:
+            snapshot = normalize_leaderboard_snapshot(cached_sheet)
+            snapshot.to_csv(cache_file, index=False)
+            return snapshot
 
     snapshot = leaderboard_snapshot(
         participants,
@@ -3835,6 +3896,13 @@ def persisted_leaderboard_snapshot(
     )
     snapshot = normalize_leaderboard_snapshot(snapshot)
     snapshot.to_csv(cache_file, index=False)
+    if should_share_leaderboard_snapshot_cache(checkpoint_id):
+        write_tabular_cache_sheet(
+            LEADERBOARD_SNAPSHOT_CACHE_SHEET,
+            cache_key,
+            snapshot,
+            LEADERBOARD_SNAPSHOT_COLUMNS,
+        )
     return snapshot
 
 
@@ -4006,9 +4074,6 @@ def warm_leaderboard_caches(
             third_place_combinations,
         )
 
-    timeline_table(humans, results, teams, matches, knockout_matchups, third_place_combinations)
-    if ais:
-        timeline_table(ais, results, teams, matches, knockout_matchups, third_place_combinations)
     write_leaderboard_cache_manifest(cache_key)
 
 
@@ -5381,22 +5446,32 @@ def timeline_table(
     third_place_combinations: pd.DataFrame,
 ) -> pd.DataFrame:
     LEADERBOARD_SNAPSHOTS_DIR.mkdir(exist_ok=True)
-    cache_file = leaderboard_timeline_cache_file(
-        leaderboard_timeline_cache_key(
-            participants,
-            results,
-            teams,
-            matches,
-            knockout_matchups,
-            third_place_combinations,
-        )
+    cache_key = leaderboard_timeline_cache_key(
+        participants,
+        results,
+        teams,
+        matches,
+        knockout_matchups,
+        third_place_combinations,
     )
+    cache_file = leaderboard_timeline_cache_file(cache_key)
     if cache_file.exists():
         cached = pd.read_csv(cache_file, dtype={"Match": str}).fillna("")
         for column in ["Points", "Rank"]:
             if column in cached.columns:
                 cached[column] = pd.to_numeric(cached[column], errors="coerce").fillna(0).astype(int)
         return cached
+    cached_sheet = read_tabular_cache_sheet(
+        LEADERBOARD_TIMELINE_CACHE_SHEET,
+        cache_key,
+        LEADERBOARD_TIMELINE_COLUMNS,
+    )
+    if cached_sheet is not None:
+        for column in ["Points", "Rank"]:
+            if column in cached_sheet.columns:
+                cached_sheet[column] = pd.to_numeric(cached_sheet[column], errors="coerce").fillna(0).astype(int)
+        cached_sheet.to_csv(cache_file, index=False)
+        return cached_sheet
 
     rows = []
     completed_ids = completed_match_ids(results, matches)
@@ -5434,6 +5509,12 @@ def timeline_table(
             )
     timeline = pd.DataFrame(rows)
     timeline.to_csv(cache_file, index=False)
+    write_tabular_cache_sheet(
+        LEADERBOARD_TIMELINE_CACHE_SHEET,
+        cache_key,
+        timeline,
+        LEADERBOARD_TIMELINE_COLUMNS,
+    )
     return timeline
 
 
