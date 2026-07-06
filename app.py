@@ -48,6 +48,8 @@ SHEET_BACKED_FILES = {
 CONFIG_SHEET = "config"
 DRAFTS_SHEET = "drafts"
 PREDICTIONS_SHEET = "predictions"
+LEADERBOARD_SNAPSHOT_CACHE_SHEET = "leaderboard_snapshot_cache"
+LEADERBOARD_TIMELINE_CACHE_SHEET = "leaderboard_timeline_cache"
 
 
 class GoogleSheetsRateLimitError(RuntimeError):
@@ -1067,6 +1069,46 @@ def write_sheet(name: str, table: pd.DataFrame, columns: list[str] | None = None
         raise_if_google_sheets_rate_limited(error)
         raise
     clear_cache()
+
+
+def read_dataframe_cache_sheet(sheet_name: str, cache_key: str) -> pd.DataFrame | None:
+    if not google_sheets_enabled():
+        return None
+    cache = read_sheet(sheet_name, ("cache_key", "row_index", "row_json"))
+    if cache.empty:
+        return None
+    matching = cache[cache["cache_key"].astype(str).eq(str(cache_key))].copy()
+    if matching.empty:
+        return None
+    matching["row_index"] = pd.to_numeric(matching["row_index"], errors="coerce").fillna(0).astype(int)
+    rows = []
+    for _, row in matching.sort_values("row_index").iterrows():
+        try:
+            value = json.loads(str(row.get("row_json", "{}")))
+        except json.JSONDecodeError:
+            return None
+        if isinstance(value, dict):
+            rows.append(value)
+    return pd.DataFrame(rows)
+
+
+def write_dataframe_cache_sheet(sheet_name: str, cache_key: str, table: pd.DataFrame) -> None:
+    if not google_sheets_enabled():
+        return
+    columns = ["cache_key", "row_index", "row_json"]
+    existing = read_sheet_fresh(sheet_name, tuple(columns))
+    if not existing.empty:
+        existing = existing[~existing["cache_key"].astype(str).eq(str(cache_key))]
+    rows = [
+        {
+            "cache_key": cache_key,
+            "row_index": index,
+            "row_json": json.dumps(record, separators=(",", ":"), default=str),
+        }
+        for index, record in enumerate(table.fillna("").to_dict(orient="records"))
+    ]
+    updated = pd.concat([existing, pd.DataFrame(rows, columns=columns)], ignore_index=True)
+    write_sheet(sheet_name, updated, columns)
 
 
 def sheet_columns_for_path(path: Path) -> tuple[str, ...]:
@@ -3822,6 +3864,11 @@ def persisted_leaderboard_snapshot(
     cache_file = leaderboard_snapshot_cache_file(cache_key)
     if cache_file.exists():
         return normalize_leaderboard_snapshot(pd.read_csv(cache_file, dtype=str).fillna(""))
+    cached_sheet = read_dataframe_cache_sheet(LEADERBOARD_SNAPSHOT_CACHE_SHEET, cache_key)
+    if cached_sheet is not None:
+        snapshot = normalize_leaderboard_snapshot(cached_sheet)
+        snapshot.to_csv(cache_file, index=False)
+        return snapshot
 
     snapshot = leaderboard_snapshot(
         participants,
@@ -3835,6 +3882,7 @@ def persisted_leaderboard_snapshot(
     )
     snapshot = normalize_leaderboard_snapshot(snapshot)
     snapshot.to_csv(cache_file, index=False)
+    write_dataframe_cache_sheet(LEADERBOARD_SNAPSHOT_CACHE_SHEET, cache_key, snapshot)
     return snapshot
 
 
@@ -5244,22 +5292,28 @@ def timeline_table(
     third_place_combinations: pd.DataFrame,
 ) -> pd.DataFrame:
     LEADERBOARD_SNAPSHOTS_DIR.mkdir(exist_ok=True)
-    cache_file = leaderboard_timeline_cache_file(
-        leaderboard_timeline_cache_key(
-            participants,
-            results,
-            teams,
-            matches,
-            knockout_matchups,
-            third_place_combinations,
-        )
+    cache_key = leaderboard_timeline_cache_key(
+        participants,
+        results,
+        teams,
+        matches,
+        knockout_matchups,
+        third_place_combinations,
     )
+    cache_file = leaderboard_timeline_cache_file(cache_key)
     if cache_file.exists():
         cached = pd.read_csv(cache_file, dtype={"Match": str}).fillna("")
         for column in ["Points", "Rank"]:
             if column in cached.columns:
                 cached[column] = pd.to_numeric(cached[column], errors="coerce").fillna(0).astype(int)
         return cached
+    cached_sheet = read_dataframe_cache_sheet(LEADERBOARD_TIMELINE_CACHE_SHEET, cache_key)
+    if cached_sheet is not None:
+        for column in ["Points", "Rank"]:
+            if column in cached_sheet.columns:
+                cached_sheet[column] = pd.to_numeric(cached_sheet[column], errors="coerce").fillna(0).astype(int)
+        cached_sheet.to_csv(cache_file, index=False)
+        return cached_sheet
 
     rows = []
     completed_ids = completed_match_ids(results, matches)
@@ -5297,6 +5351,7 @@ def timeline_table(
             )
     timeline = pd.DataFrame(rows)
     timeline.to_csv(cache_file, index=False)
+    write_dataframe_cache_sheet(LEADERBOARD_TIMELINE_CACHE_SHEET, cache_key, timeline)
     return timeline
 
 
