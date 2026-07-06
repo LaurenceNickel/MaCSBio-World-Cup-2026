@@ -4012,26 +4012,6 @@ def warm_leaderboard_caches(
     if leaderboard_cache_is_warm(cache_key):
         return
 
-    checkpoints = leaderboard_checkpoint_options(
-        results,
-        matches,
-        teams,
-        knockout_matchups,
-        third_place_combinations,
-    )
-    for checkpoint in checkpoints:
-        scoped_results = results_through_match(results, matches, str(checkpoint["through_match_id"]))
-        persisted_leaderboard_snapshot(
-            str(checkpoint["checkpoint_id"]),
-            humans,
-            scoped_results,
-            teams,
-            matches,
-            knockout_matchups,
-            third_place_combinations,
-            awarded_group_standings=set(checkpoint["awarded_group_standings"]),
-        )
-
     completed_ids = completed_match_ids(results, matches)
     group_stage_results = results_for_stage(results, matches, GROUP_STAGE)
     persisted_leaderboard_snapshot(
@@ -4044,6 +4024,30 @@ def warm_leaderboard_caches(
         third_place_combinations,
     )
     if completed_ids:
+        checkpoints = leaderboard_checkpoint_options(
+            results,
+            matches,
+            teams,
+            knockout_matchups,
+            third_place_combinations,
+        )
+        if checkpoints:
+            latest_checkpoint = checkpoints[-1]
+            latest_checkpoint_results = results_through_match(
+                results,
+                matches,
+                str(latest_checkpoint["through_match_id"]),
+            )
+            persisted_leaderboard_snapshot(
+                str(latest_checkpoint["checkpoint_id"]),
+                humans,
+                latest_checkpoint_results,
+                teams,
+                matches,
+                knockout_matchups,
+                third_place_combinations,
+                awarded_group_standings=set(latest_checkpoint["awarded_group_standings"]),
+            )
         latest_results = results_through_match(results, matches, completed_ids[-1])
         persisted_leaderboard_snapshot(
             f"default_humans:{completed_ids[-1]}",
