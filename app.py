@@ -6032,7 +6032,8 @@ def scenario_event_label(event: dict[str, Any], teams: pd.DataFrame) -> str:
 
 
 def scenario_path_text(events: list[dict[str, Any]], teams: pd.DataFrame) -> str:
-    return "; ".join(scenario_event_label(event, teams) for event in events) or "Current standings hold"
+    ordered_events = sorted(events, key=scenario_event_sort_key)
+    return "; ".join(scenario_event_label(event, teams) for event in ordered_events) or "Current standings hold"
 
 
 def scenario_stage_entrants(
@@ -6243,6 +6244,17 @@ def event_key(event: dict[str, Any]) -> tuple[str, str]:
     return str(event.get("match_id", "")), str(event.get("winner", ""))
 
 
+def match_number(match_id: Any) -> int:
+    match = re.search(r"\d+", str(match_id))
+    return int(match.group(0)) if match else 9999
+
+
+def scenario_event_sort_key(event: dict[str, Any]) -> tuple[int, int]:
+    stage = str(event.get("stage", ""))
+    stage_index = KNOCKOUT_STAGES.index(stage) if stage in KNOCKOUT_STAGES else len(KNOCKOUT_STAGES)
+    return stage_index, match_number(event.get("match_id", ""))
+
+
 def render_user_winning_scenarios(
     participants: list[dict[str, Any]],
     scenarios: list[dict[str, Any]],
@@ -6252,13 +6264,23 @@ def render_user_winning_scenarios(
 ) -> None:
     winners = winning_scenarios_by_user(scenarios, scenario_rankings)
     total_scenarios = len(scenarios)
-    ordered_users = current_snapshot.sort_values(["rank", "user_name"]).to_dict("records")
-    user_lookup = {str(participant["user_id"]): participant for participant in participants}
-    for user in ordered_users:
+    ordered_users = []
+    for user in current_snapshot.to_dict("records"):
         user_id = str(user["user_id"])
-        user_name = str(user["user_name"])
         winning = winners.get(user_id, [])
         probability = 100 * len(winning) / total_scenarios if total_scenarios else 0
+        ordered_users.append({**user, "winning_scenarios": winning, "win_probability": probability})
+    ordered_users.sort(
+        key=lambda row: (
+            -float(row["win_probability"]),
+            int(row["rank"]),
+            str(row["user_name"]),
+        )
+    )
+    for user in ordered_users:
+        user_name = str(user["user_name"])
+        winning = user["winning_scenarios"]
+        probability = float(user["win_probability"])
         with st.expander(f"{user_name}: {probability:.1f}% chance to finish first", expanded=probability > 0):
             if not winning:
                 st.write("No remaining outcome combination leaves this participant in first place.")
@@ -6266,21 +6288,23 @@ def render_user_winning_scenarios(
 
             counts: dict[tuple[str, str], int] = {}
             labels: dict[tuple[str, str], str] = {}
+            events_by_key: dict[tuple[str, str], dict[str, Any]] = {}
             for scenario in winning:
                 for event in scenario["events"]:
                     key = event_key(event)
                     counts[key] = counts.get(key, 0) + 1
                     labels[key] = scenario_event_label(event, teams)
+                    events_by_key.setdefault(key, event)
 
-            required = [
-                labels[key]
+            required_keys = [
+                key
                 for key, count in counts.items()
                 if count == len(winning)
             ]
-            if required:
+            if required_keys:
                 st.markdown("Required in every winning path:")
-                for label in sorted(required):
-                    st.write(f"- {label}")
+                for key in sorted(required_keys, key=lambda item: scenario_event_sort_key(events_by_key[item])):
+                    st.write(f"- {labels[key]}")
 
             common_rows = [
                 {
@@ -6292,6 +6316,8 @@ def render_user_winning_scenarios(
                 if count < len(winning)
             ]
             if common_rows:
+                if required_keys:
+                    st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
                 st.markdown("Most common events in winning paths:")
                 common_table = pd.DataFrame(common_rows).sort_values(
                     ["Winning paths", "Outcome"],
@@ -6299,9 +6325,10 @@ def render_user_winning_scenarios(
                 ).head(8)
                 render_centered_dataframe(common_table, centered_columns={"Outcome"}, bold_columns={"Share of winning paths"})
 
+            if required_keys or common_rows:
+                st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
             path_rows = [
                 {
-                    "Scenario": int(scenario["scenario_id"]),
                     "Required outcomes": scenario_path_text(scenario["events"], teams),
                 }
                 for scenario in winning
@@ -6318,15 +6345,6 @@ def render_endgame_scenarios(
     knockout_matchups: pd.DataFrame,
     third_place_combinations: pd.DataFrame,
 ) -> None:
-    completed_ids = completed_match_ids(results, matches)
-    # if not completed_ids:
-    #     st.info("Endgame scenarios will appear from the quarter-finals onward!")
-    #     return
-    # last_stage = str(matches[matches["match_id"].eq(completed_ids[-1])].iloc[0]["stage"])
-    # if last_stage not in ["quarter_final", "semi_final", "third_place", "final"]:
-    #     st.info("Endgame scenarios appear from the quarter-finals onward.")
-    #     return
-
     participants = leaderboard_participants(users, include_ai=False)
     if not participants:
         st.info("Endgame scenarios will appear once participants have submitted predictions.")
