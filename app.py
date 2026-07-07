@@ -6322,10 +6322,10 @@ def render_endgame_scenarios(
     # if not completed_ids:
     #     st.info("Endgame scenarios will appear from the quarter-finals onward!")
     #     return
-    last_stage = str(matches[matches["match_id"].eq(completed_ids[-1])].iloc[0]["stage"])
-    if last_stage not in ["quarter_final", "semi_final", "third_place", "final"]:
-        st.info("Endgame scenarios appear from the quarter-finals onward.")
-        return
+    # last_stage = str(matches[matches["match_id"].eq(completed_ids[-1])].iloc[0]["stage"])
+    # if last_stage not in ["quarter_final", "semi_final", "third_place", "final"]:
+    #     st.info("Endgame scenarios appear from the quarter-finals onward.")
+    #     return
 
     participants = leaderboard_participants(users, include_ai=False)
     if not participants:
