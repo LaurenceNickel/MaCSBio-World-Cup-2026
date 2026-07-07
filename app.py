@@ -4013,14 +4013,24 @@ def normalize_leaderboard_cache_rows(rows: pd.DataFrame) -> pd.DataFrame:
     return rows
 
 
-def read_leaderboard_cache(cache_key: str) -> pd.DataFrame | None:
+def read_tabular_cache_sheet(sheet_name: str, cache_key: str, columns: list[str]) -> pd.DataFrame | None:
     if not google_sheets_enabled():
         return None
-    cache = read_sheet_fresh(LEADERBOARD_CACHE_SHEET, tuple(LEADERBOARD_CACHE_COLUMNS))
+    try:
+        cache = read_sheet(sheet_name, tuple(columns))
+    except Exception:
+        return None
     if cache.empty or "cache_key" not in cache.columns:
         return None
     matching = cache[cache["cache_key"].astype(str).eq(str(cache_key))].copy()
     if matching.empty:
+        return None
+    return matching.reset_index(drop=True)
+
+
+def read_leaderboard_cache(cache_key: str) -> pd.DataFrame | None:
+    matching = read_tabular_cache_sheet(LEADERBOARD_CACHE_SHEET, cache_key, LEADERBOARD_CACHE_COLUMNS)
+    if matching is None:
         return None
     rows = normalize_leaderboard_cache_rows(matching)
     return rows[["rank_change", *LEADERBOARD_SNAPSHOT_COLUMNS]].reset_index(drop=True)
