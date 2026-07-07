@@ -1632,7 +1632,7 @@ def stage_label(stage: str) -> str:
 def score_lookup(score_df: pd.DataFrame) -> dict[str, dict[str, Any]]:
     if score_df.empty or "match_id" not in score_df.columns:
         return {}
-    return {str(row["match_id"]): row.to_dict() for _, row in score_df.iterrows()}
+    return {str(row["match_id"]): row for row in score_df.to_dict("records")}
 
 
 def make_score_df_from_session(matches: pd.DataFrame, user_id: str) -> pd.DataFrame:
@@ -1689,7 +1689,7 @@ def head_to_head_stats(
         for team_id in team_ids
     }
 
-    for _, match in group_matches.iterrows():
+    for match in group_matches.to_dict("records"):
         home_id = match["home_team"]
         away_id = match["away_team"]
         if home_id not in involved or away_id not in involved:
@@ -1789,7 +1789,7 @@ def sort_group_table(
     score_rows: dict[str, dict[str, Any]],
     rankings: dict[str, int],
 ) -> pd.DataFrame:
-    table_by_team = {row["team_id"]: row.to_dict() for _, row in table.iterrows()}
+    table_by_team = {str(row["team_id"]): row for row in table.to_dict("records")}
     ordered_by_points = sorted(table_by_team, key=lambda team_id: -to_int(table_by_team[team_id]["points"]))
 
     ordered_team_ids: list[str] = []
@@ -1830,9 +1830,22 @@ def calculate_group_standings(
     use_cards: bool,
 ) -> dict[str, pd.DataFrame]:
     standings: dict[str, pd.DataFrame] = {}
+    score_rows = score_lookup(score_df)
+    rankings = team_rankings_lookup(teams)
+    teams_by_group = team_ids_by_group(teams)
+    matches_by_group = group_match_rows_by_group(matches, teams)
 
     for group in GROUPS:
-        standings[group] = calculate_single_group_standing(group, teams, matches, score_df, use_cards)
+        standings[group] = group_standing_from_score_rows(
+            group,
+            teams,
+            matches,
+            score_rows,
+            use_cards,
+            rankings=rankings,
+            group_teams=teams_by_group.get(group, []),
+            group_matches=matches_by_group.get(group, matches.iloc[0:0]),
+        )
 
     return standings
 
@@ -2112,6 +2125,26 @@ def team_groups_lookup(teams: pd.DataFrame) -> dict[str, str]:
     return dict(zip(teams["team_id"].astype(str), teams["group"].astype(str)))
 
 
+def team_rankings_lookup(teams: pd.DataFrame) -> dict[str, int]:
+    if teams.empty or "team_id" not in teams.columns or "world_cup_ranking" not in teams.columns:
+        return {}
+    return {
+        str(team_id): to_int(ranking, 9999)
+        for team_id, ranking in zip(teams["team_id"], teams["world_cup_ranking"])
+    }
+
+
+def team_ids_by_group(teams: pd.DataFrame) -> dict[str, list[str]]:
+    grouped = {group: [] for group in GROUPS}
+    if teams.empty or "team_id" not in teams.columns or "group" not in teams.columns:
+        return grouped
+    for team_id, group in zip(teams["team_id"], teams["group"]):
+        group_text = str(group)
+        if group_text in grouped:
+            grouped[group_text].append(str(team_id))
+    return grouped
+
+
 def match_group(match: pd.Series, teams: pd.DataFrame) -> str:
     if str(match.get("stage", "")) != GROUP_STAGE:
         return ""
@@ -2168,12 +2201,25 @@ def group_is_complete(group: str, matches: pd.DataFrame, results: pd.DataFrame, 
 
 
 def group_match_rows(group: str, matches: pd.DataFrame, teams: pd.DataFrame) -> pd.DataFrame:
-    team_groups = dict(zip(teams["team_id"], teams["group"]))
-    return matches[
-        (matches["stage"] == GROUP_STAGE)
-        & (matches["home_team"].map(team_groups) == group)
-        & (matches["away_team"].map(team_groups) == group)
-    ]
+    return group_match_rows_by_group(matches, teams).get(group, matches.iloc[0:0])
+
+
+def group_match_rows_by_group(matches: pd.DataFrame, teams: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    empty = matches.iloc[0:0]
+    grouped = {group: empty for group in GROUPS}
+    if matches.empty or teams.empty:
+        return grouped
+    required_columns = {"stage", "home_team", "away_team"}
+    if not required_columns.issubset(matches.columns):
+        return grouped
+
+    team_groups = team_groups_lookup(teams)
+    group_matches = matches[matches["stage"].eq(GROUP_STAGE)]
+    home_groups = group_matches["home_team"].astype(str).map(team_groups)
+    away_groups = group_matches["away_team"].astype(str).map(team_groups)
+    for group in GROUPS:
+        grouped[group] = group_matches[home_groups.eq(group) & away_groups.eq(group)]
+    return grouped
 
 
 def remaining_group_matches(group: str, matches: pd.DataFrame, results: pd.DataFrame, teams: pd.DataFrame) -> pd.DataFrame:
@@ -2190,8 +2236,22 @@ def group_standing_from_score_rows(
     matches: pd.DataFrame,
     score_rows: dict[str, dict[str, Any]],
     use_cards: bool,
+    rankings: dict[str, int] | None = None,
+    group_teams: list[str] | None = None,
+    group_matches: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    ordered_team_ids, rows = ordered_group_rows_from_score_rows(group, teams, matches, score_rows, use_cards)
+    ordered_team_ids, rows = ordered_group_rows_from_score_rows(
+        group,
+        teams,
+        matches,
+        score_rows,
+        use_cards,
+        rankings=rankings,
+        group_teams=group_teams,
+        group_matches=group_matches,
+    )
+    if not ordered_team_ids:
+        return pd.DataFrame(columns=STANDING_COLUMNS)
     return pd.DataFrame([rows[team_id] for team_id in ordered_team_ids])[STANDING_COLUMNS].reset_index(drop=True)
 
 
@@ -2201,9 +2261,12 @@ def ordered_group_rows_from_score_rows(
     matches: pd.DataFrame,
     score_rows: dict[str, dict[str, Any]],
     use_cards: bool,
+    rankings: dict[str, int] | None = None,
+    group_teams: list[str] | None = None,
+    group_matches: pd.DataFrame | None = None,
 ) -> tuple[list[str], dict[str, dict[str, Any]]]:
-    rankings = {row["team_id"]: to_int(row["world_cup_ranking"], 9999) for _, row in teams.iterrows()}
-    group_teams = teams[teams["group"] == group]["team_id"].tolist()
+    rankings = rankings if rankings is not None else team_rankings_lookup(teams)
+    group_teams = group_teams if group_teams is not None else team_ids_by_group(teams).get(group, [])
     rows = {
         team_id: {
             "team_id": team_id,
@@ -2219,9 +2282,9 @@ def ordered_group_rows_from_score_rows(
         }
         for team_id in group_teams
     }
-    group_matches = group_match_rows(group, matches, teams)
+    group_matches = group_matches if group_matches is not None else group_match_rows(group, matches, teams)
 
-    for _, match in group_matches.iterrows():
+    for match in group_matches.to_dict("records"):
         match_id = str(match["match_id"])
         score = completed_score(score_rows.get(match_id))
         if score is None:
@@ -2261,8 +2324,8 @@ def ordered_group_rows_from_score_rows(
     table["goal_difference"] = table["goals_for"] - table["goals_against"]
     sorted_table = sort_group_table(table, group_matches, score_rows, rankings)
     return [str(team_id) for team_id in sorted_table["team_id"]], {
-        str(row["team_id"]): row.to_dict()
-        for _, row in sorted_table.iterrows()
+        str(row["team_id"]): row
+        for row in sorted_table.to_dict("records")
     }
 
 
@@ -2272,7 +2335,7 @@ def head_to_head_points_between(
     group_matches: pd.DataFrame,
     score_rows: dict[str, dict[str, Any]],
 ) -> tuple[int, int] | None:
-    for _, match in group_matches.iterrows():
+    for match in group_matches.to_dict("records"):
         home_id = str(match["home_team"])
         away_id = str(match["away_team"])
         if {home_id, away_id} != {team_id, other_id}:
@@ -2302,7 +2365,7 @@ def group_lock_context(
     team_ids = [str(team_id) for team_id in table["team_id"]]
     points = {str(row["team_id"]): to_int(row["points"]) for _, row in table.iterrows()}
     remaining_by_team = {team_id: 0 for team_id in team_ids}
-    for _, match in group_matches.iterrows():
+    for match in group_matches.to_dict("records"):
         if completed_score(score_rows.get(str(match["match_id"]))) is not None:
             continue
         remaining_by_team[str(match["home_team"])] += 1
