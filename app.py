@@ -978,6 +978,11 @@ def raise_if_google_sheets_rate_limited(error: Exception) -> None:
         raise GoogleSheetsRateLimitError from error
 
 
+def is_noncritical_cache_sheet(name: str) -> bool:
+    text = str(name).strip().lower()
+    return "cache" in text and text not in set(SHEET_BACKED_FILES.values())
+
+
 @st.cache_resource
 def sheets_workbook():
     if gspread is None:
@@ -1032,6 +1037,8 @@ def sheet_values_to_frame(name: str, columns: tuple[str, ...] = ()) -> pd.DataFr
     except WorksheetNotFound:
         return pd.DataFrame(columns=list(columns))
     except APIError as error:
+        if is_noncritical_cache_sheet(name):
+            return pd.DataFrame(columns=list(columns))
         raise_if_google_sheets_rate_limited(error)
         raise
     if not values:
