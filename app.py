@@ -978,11 +978,6 @@ def raise_if_google_sheets_rate_limited(error: Exception) -> None:
         raise GoogleSheetsRateLimitError from error
 
 
-def is_noncritical_cache_sheet(name: str) -> bool:
-    text = str(name).strip().lower()
-    return "cache" in text and text not in set(SHEET_BACKED_FILES.values())
-
-
 @st.cache_resource
 def sheets_workbook():
     if gspread is None:
@@ -1037,8 +1032,6 @@ def sheet_values_to_frame(name: str, columns: tuple[str, ...] = ()) -> pd.DataFr
     except WorksheetNotFound:
         return pd.DataFrame(columns=list(columns))
     except APIError as error:
-        if is_noncritical_cache_sheet(name):
-            return pd.DataFrame(columns=list(columns))
         raise_if_google_sheets_rate_limited(error)
         raise
     if not values:
@@ -4020,24 +4013,14 @@ def normalize_leaderboard_cache_rows(rows: pd.DataFrame) -> pd.DataFrame:
     return rows
 
 
-def read_tabular_cache_sheet(sheet_name: str, cache_key: str, columns: list[str]) -> pd.DataFrame | None:
+def read_leaderboard_cache(cache_key: str) -> pd.DataFrame | None:
     if not google_sheets_enabled():
         return None
-    try:
-        cache = read_sheet(sheet_name, tuple(columns))
-    except Exception:
-        return None
+    cache = read_sheet_fresh(LEADERBOARD_CACHE_SHEET, tuple(LEADERBOARD_CACHE_COLUMNS))
     if cache.empty or "cache_key" not in cache.columns:
         return None
     matching = cache[cache["cache_key"].astype(str).eq(str(cache_key))].copy()
     if matching.empty:
-        return None
-    return matching.reset_index(drop=True)
-
-
-def read_leaderboard_cache(cache_key: str) -> pd.DataFrame | None:
-    matching = read_tabular_cache_sheet(LEADERBOARD_CACHE_SHEET, cache_key, LEADERBOARD_CACHE_COLUMNS)
-    if matching is None:
         return None
     rows = normalize_leaderboard_cache_rows(matching)
     return rows[["rank_change", *LEADERBOARD_SNAPSHOT_COLUMNS]].reset_index(drop=True)
