@@ -6318,10 +6318,10 @@ def render_endgame_scenarios(
     knockout_matchups: pd.DataFrame,
     third_place_combinations: pd.DataFrame,
 ) -> None:
-    completed_ids = completed_match_ids(results, matches)
-    if not completed_ids:
-        st.info("Endgame scenarios will appear from the quarter-finals onward!")
-        return
+    # completed_ids = completed_match_ids(results, matches)
+    # if not completed_ids:
+    #     st.info("Endgame scenarios will appear from the quarter-finals onward!")
+    #     return
     last_stage = str(matches[matches["match_id"].eq(completed_ids[-1])].iloc[0]["stage"])
     if last_stage not in ["quarter_final", "semi_final", "third_place", "final"]:
         st.info("Endgame scenarios appear from the quarter-finals onward.")
