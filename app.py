@@ -4274,6 +4274,18 @@ def render_home(
     knockout_matchups: pd.DataFrame,
     third_place_combinations: pd.DataFrame,
 ) -> None:
+    st.markdown(
+        """
+        <style>
+        .stApp,
+        [data-testid="stAppViewContainer"] {
+            background: #ffffff !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
     if "user_id" not in st.session_state:
         render_login(users)
         return
@@ -5244,19 +5256,6 @@ def render_completed_tournament_summary(
     if final_result is None:
         return False
 
-    st.markdown(
-        """
-        <style>
-        .stApp,
-        [data-testid="stAppViewContainer"],
-        [data-testid="stMain"],
-        section.main {
-            background: #ffffff !important;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
     st.markdown(
         f'<div class="final-summary">{final_result_html(final_result, teams)}</div>',
         unsafe_allow_html=True,
